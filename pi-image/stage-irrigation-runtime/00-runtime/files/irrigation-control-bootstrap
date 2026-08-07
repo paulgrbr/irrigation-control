@@ -5,6 +5,7 @@ compose_dir="/opt/irrigation-control"
 compose_file="${compose_dir}/compose.yaml"
 compose_url="https://raw.githubusercontent.com/paulgrbr/irrigation-control/main/infrastructure/compose.yaml"
 temporary_compose="$(mktemp)"
+compose_cmd=()
 display_cmd="/usr/local/sbin/irrigation-control-display"
 backend_health_url="${BACKEND_HEALTH_URL:-http://127.0.0.1:8080/health}"
 backend_timeout_seconds="${BACKEND_READY_TIMEOUT_SECONDS:-300}"
@@ -94,6 +95,21 @@ wait_for_docker() {
 	false
 }
 
+detect_compose_command() {
+	if docker compose version >/dev/null 2>&1; then
+		compose_cmd=(docker compose)
+		return
+	fi
+
+	if command -v docker-compose >/dev/null 2>&1; then
+		compose_cmd=(docker-compose)
+		return
+	fi
+
+	echo "[bootstrap] no docker compose command found (docker compose or docker-compose)" >&2
+	false
+}
+
 fetch_compose_with_retry() {
 	set_step "FETCH_COMPOSE" "FETCH_COMPOSE" "$FETCH_COMPOSE_PERCENT" "Compose Download"
 
@@ -130,7 +146,7 @@ fetch_compose_with_retry() {
 
 validate_and_install_compose() {
 	set_step "VALIDATE_COMPOSE" "VALIDATE" "$VALIDATE_PERCENT" "Datei pruefen"
-	docker compose -f "$compose_candidate" config --quiet
+	"${compose_cmd[@]}" -f "$compose_candidate" config --quiet
 
 	set_step "INSTALL_COMPOSE" "INSTALL" "$INSTALL_PERCENT" "Datei sichern"
 	if [ "$compose_source" = "remote" ]; then
@@ -145,7 +161,7 @@ pull_images_with_progress() {
 	local pull_percent="$PULL_PERCENT_START"
 	set_step "PULL_IMAGES" "PULL_IMAGES" "$pull_percent" "Images werden geladen"
 
-	docker compose -f "$compose_file" pull &
+	"${compose_cmd[@]}" -f "$compose_file" pull &
 	local pull_pid="$!"
 	while kill -0 "$pull_pid" 2>/dev/null; do
 		if [ "$pull_percent" -lt "$PULL_PERCENT_END" ]; then
@@ -162,7 +178,7 @@ pull_images_with_progress() {
 
 start_compose_stack() {
 	set_step "START_CONTAINERS" "START" "$START_PERCENT" "Container starten"
-	docker compose -f "$compose_file" up -d --remove-orphans
+	"${compose_cmd[@]}" -f "$compose_file" up -d --remove-orphans
 }
 
 wait_for_backend_ready() {
@@ -199,6 +215,7 @@ set_step "BOOTING" "BOOTING" "5" "System wird vorbereitet"
 
 install -d -m 0755 "$compose_dir"
 wait_for_docker
+detect_compose_command
 fetch_compose_with_retry
 validate_and_install_compose
 pull_images_with_progress
