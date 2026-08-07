@@ -10,6 +10,7 @@ from smbus2 import SMBus
 
 RELAY_TIME_SECONDS = 0.5
 RELAY_PAUSE_SECONDS = 0.3
+HEALTH_DISPLAY_DELAY_SECONDS = 3
 LCD_WIDTH = 20
 LCD_BACKLIGHT = 0x08
 LCD_ENABLE_BIT = 0x04
@@ -97,8 +98,10 @@ class LCD:
 
 app = Flask(__name__)
 lcd = LCD()
-status = {"state": "starting", "current_relay": None, "error": None}
+status = {"state": "waiting_for_health", "current_relay": None, "error": None}
 relay_devices = []
+display_timer = None
+display_timer_lock = threading.Lock()
 
 
 def update_display(line3: str, line4: str) -> None:
@@ -134,6 +137,16 @@ def run_relay_test() -> None:
             device.write(True)
 
 
+def schedule_display_test() -> None:
+    global display_timer
+
+    with display_timer_lock:
+        if display_timer is not None:
+            return
+        display_timer = threading.Timer(HEALTH_DISPLAY_DELAY_SECONDS, run_relay_test)
+        display_timer.start()
+
+
 @atexit.register
 def close_devices() -> None:
     for device in relay_devices:
@@ -149,11 +162,10 @@ def index():
 
 @app.get("/health")
 def health():
-    http_status = 200 if status["state"] == "ready" else 503
+    schedule_display_test()
+    http_status = 503 if status["state"] == "failed" else 200
     return jsonify(**status), http_status
 
 
 if __name__ == "__main__":
-    test_thread = threading.Thread(target=run_relay_test, name="relay-test", daemon=True)
-    test_thread.start()
     app.run(host="0.0.0.0", port=8080)

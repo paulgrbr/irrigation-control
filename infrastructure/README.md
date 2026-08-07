@@ -17,15 +17,15 @@ first boot. The image creates the single `irrigation` admin account with the
 same password as the initial image user. Portainer stores its state in the
 `portainer_data` Docker volume.
 
-The backend writes `Willkommen` to the attached 20x4 I2C LCD and activates each
-relay once when its container starts. It uses BCM GPIO pins `17, 27, 22, 10, 5,
-9, 6, 11`; these match `pins.sh`. The relays are LOW-active. The service needs
-privileged device access because it operates the Pi GPIO controller and I2C bus.
+The backend waits until the Pi bootstrap has finished its LCD progress display.
+It then writes `Willkommen` to the attached 20x4 I2C LCD and activates each
+relay once. It uses BCM GPIO pins `17, 27, 22, 10, 5, 9, 6, 11`; these match
+`pins.sh`. The relays are LOW-active. The service needs privileged device access
+because it operates the Pi GPIO controller and I2C bus.
 
-The backend responds on `http://<pi-host>:8080/health` only after the relay test
-finishes; the Pi bootstrap uses that endpoint as its readiness contract. A
-hardware failure leaves the endpoint at HTTP 503 and reports the failure on the
-LCD and in the container log.
+The backend responds on `http://<pi-host>:8080/health` while it waits for this
+handoff, so the Pi bootstrap can finish. A relay-test failure later reports HTTP
+503 and writes the failure to the LCD and container log.
 
 ## Updates
 
