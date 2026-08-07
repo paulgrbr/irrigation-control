@@ -84,6 +84,16 @@ unset PORTAINER_ADMIN_USERNAME PORTAINER_ADMIN_PASSWORD
 [[ "$PORTAINER_ADMIN_PASSWORD" = "$test_password" ]]
 
 if command -v systemd-analyze >/dev/null 2>&1; then
+	install -d "${unit_root}/etc/systemd/system"
+	for target in sysinit.target basic.target network-online.target; do
+		printf '[Unit]\nDescription=Validation stub\n' \
+			>"${unit_root}/etc/systemd/system/${target}"
+	done
+	install -D -m 0755 /usr/bin/true "${unit_root}/usr/bin/true"
+	for service in docker.service systemd-modules-load.service; do
+		printf '[Service]\nType=oneshot\nExecStart=/usr/bin/true\n' \
+			>"${unit_root}/etc/systemd/system/${service}"
+	done
 	install -D -m 0755 \
 		"${runtime_dir}/files/irrigation-control-bootstrap" \
 		"${unit_root}/usr/local/sbin/irrigation-control-bootstrap"
