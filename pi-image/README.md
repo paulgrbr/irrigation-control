@@ -32,7 +32,24 @@ resulting image:
 
 After a successful build, download the `irrigation-control-lite-arm64` artifact
 from the workflow run and flash the ZIP image using Raspberry Pi Imager or a
-comparable tool.
+comparable tool. The artifact includes a `.sha256` checksum file. Verify the
+download before flashing it with `shasum -a 256 -c <image-file>.sha256`.
+
+## Reproducibility
+
+The workflow pins the GitHub Actions and the `RPi-Distro/pi-gen` source to
+immutable commit IDs. Image name, Raspberry Pi OS release, and pi-gen stages
+are central workflow constants, so a specific Git commit describes the intended
+build input completely.
+
+The GitHub runner image and Raspberry Pi OS packages are fetched at build time.
+Consequently, rebuilding the same repository commit later can produce different
+bytes, change behavior, or fail if upstream repositories are no longer
+available. Workflow artifacts expire after 14 days and are not a long-term
+archive. For every deployed image, create a Git tag and retain the image and
+its checksum in a GitHub Release or external artifact storage. A bit-identical
+rebuild years later additionally requires an archived APT snapshot or a
+controlled package mirror.
 
 ## Future Customization
 

@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE_NAME: irrigation-control-lite
+  ARTIFACT_NAME: irrigation-control-lite-arm64
+  PI_GEN_REPOSITORY: RPi-Distro/pi-gen
+  PI_GEN_COMMIT: ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5
+  RASPBERRY_PI_OS_RELEASE: trixie
+  PI_GEN_STAGES: stage0 stage1 stage2
+
 jobs:
   build:
     name: Build Raspberry Pi OS Lite (ARM64)
@@ -19,9 +27,9 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Validate SSH public key
+      - name: Validate required secrets
         env:
           SSH_PUBLIC_KEY: ${{ secrets.PI_IMAGE_SSH_PUBLIC_KEY }}
           USER_PASSWORD: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
@@ -47,12 +55,13 @@ jobs:
 
       - name: Build image
         id: build
-        uses: usimd/pi-gen-action@v1
+        uses: usimd/pi-gen-action@cec66cba86bdcd23984e6a79ea4e9251d90bc798 # v1
         with:
-          image-name: irrigation-control-lite
-          pi-gen-version: arm64
-          release: trixie
-          stage-list: stage0 stage1 stage2
+          image-name: ${{ env.IMAGE_NAME }}
+          pi-gen-repository: ${{ env.PI_GEN_REPOSITORY }}
+          pi-gen-version: ${{ env.PI_GEN_COMMIT }}
+          release: ${{ env.RASPBERRY_PI_OS_RELEASE }}
+          stage-list: ${{ env.PI_GEN_STAGES }}
           verbose-output: true
           export-last-stage-only: true
           compression: zip
@@ -68,10 +77,26 @@ jobs:
           keyboard-keymap: de
           keyboard-layout: German
 
+      - name: Generate image checksum
+        id: checksum
+        env:
+          IMAGE_PATH: ${{ steps.build.outputs.image-path }}
+        run: |
+          image_directory="$(dirname "$IMAGE_PATH")"
+          image_filename="$(basename "$IMAGE_PATH")"
+          checksum_path="${IMAGE_PATH}.sha256"
+          (
+            cd "$image_directory"
+            sha256sum "$image_filename" > "$(basename "$checksum_path")"
+          )
+          echo "checksum-path=$checksum_path" >> "$GITHUB_OUTPUT"
+
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: irrigation-control-lite-arm64
-          path: ${{ steps.build.outputs.image-path }}
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            ${{ steps.build.outputs.image-path }}
+            ${{ steps.checksum.outputs.checksum-path }}
           if-no-files-found: error
           retention-days: 14
