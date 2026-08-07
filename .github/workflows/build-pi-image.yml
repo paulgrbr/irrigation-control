@@ -47,6 +47,7 @@ jobs:
           pi-gen-version: arm64
           release: trixie
           stage-list: stage0 stage1 stage2
+          verbose-output: true
           export-last-stage-only: true
           compression: zip
           hostname: irrigation-control
