@@ -5,7 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apk add --no-cache --virtual .build-dependencies build-base linux-headers
+RUN apk add --no-cache --virtual .build-dependencies build-base linux-headers swig
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
