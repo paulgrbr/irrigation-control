@@ -6,15 +6,10 @@ install -d -m 0755 "${ROOTFS_DIR}/usr/local/sbin"
 install -d -m 0755 "${ROOTFS_DIR}/etc/systemd/system"
 if [ -n "${PORTAINER_ADMIN_PASSWORD:-}" ]; then
   install -d -m 0755 "${ROOTFS_DIR}/etc/default"
-  PORTAINER_ADMIN_USERNAME="${PORTAINER_ADMIN_USERNAME:-irrigation}" \
-  PORTAINER_ADMIN_PASSWORD="${PORTAINER_ADMIN_PASSWORD}" \
-  python3 - <<'PY' >"${ROOTFS_DIR}/etc/default/irrigation-control-bootstrap"
-import json
-import os
-
-print(f'PORTAINER_ADMIN_USERNAME={json.dumps(os.environ["PORTAINER_ADMIN_USERNAME"])}')
-print(f'PORTAINER_ADMIN_PASSWORD={json.dumps(os.environ["PORTAINER_ADMIN_PASSWORD"])}')
-PY
+  {
+    printf 'PORTAINER_ADMIN_USERNAME=%q\n' "${PORTAINER_ADMIN_USERNAME:-irrigation}"
+    printf 'PORTAINER_ADMIN_PASSWORD=%q\n' "${PORTAINER_ADMIN_PASSWORD}"
+  } >"${ROOTFS_DIR}/etc/default/irrigation-control-bootstrap"
   chmod 0600 "${ROOTFS_DIR}/etc/default/irrigation-control-bootstrap"
 fi
 install -m 0755 files/irrigation-control-bootstrap \

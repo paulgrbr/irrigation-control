@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/build-pi-image.yml
       - pi-image/**
+      - infrastructure/compose.yaml
 
 permissions:
   contents: read
@@ -29,6 +30,9 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Validate Pi image flow
+        run: bash pi-image/validate.sh
+
       - name: Validate required secrets
         env:
           SSH_PUBLIC_KEY: ${{ secrets.PI_IMAGE_SSH_PUBLIC_KEY }}
@@ -43,6 +47,13 @@ jobs:
             echo "PI_IMAGE_USER_PASSWORD is not set."
             exit 1
           fi
+
+          case "$USER_PASSWORD" in
+            *$'\n'*)
+              echo "PI_IMAGE_USER_PASSWORD must not contain a newline."
+              exit 1
+              ;;
+          esac
 
           key_file="$(mktemp)"
           trap 'rm -f "$key_file"' EXIT

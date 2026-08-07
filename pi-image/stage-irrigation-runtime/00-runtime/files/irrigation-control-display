@@ -2,7 +2,6 @@
 # pyright: reportMissingImports=false
 import argparse
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -20,17 +19,17 @@ SHADE_CHAR = "\x02"
 INIT_MARKER_PATH = Path("/run/irrigation-control-display.initialized")
 
 STATE_META = {
-    "BOOTING": (1, 9, "Systemstart"),
-    "WAIT_DOCKER": (2, 9, "Docker startet"),
-    "FETCH_COMPOSE": (3, 9, "Konfig laden"),
-    "VALIDATE": (4, 9, "Konfig pruefen"),
-    "INSTALL": (5, 9, "Konfig speichern"),
-    "PULL_IMAGES": (6, 9, "Images laden"),
-    "START": (7, 9, "Container starten"),
-    "PORTAINER_INIT": (8, 9, "Portainer einrichten"),
-    "WAIT_BACKEND": (9, 9, "Backend startet"),
-    "READY": (9, 9, "Bereit"),
-    "ERROR": (9, 9, "Fehler"),
+    "BOOTING": (1, 9),
+    "WAIT_DOCKER": (2, 9),
+    "FETCH_COMPOSE": (3, 9),
+    "VALIDATE": (4, 9),
+    "INSTALL": (5, 9),
+    "PULL_IMAGES": (6, 9),
+    "START": (7, 9),
+    "PORTAINER_INIT": (8, 9),
+    "WAIT_BACKEND": (9, 9),
+    "READY": (9, 9),
+    "ERROR": (9, 9),
 }
 
 LINE3_TEXT = {
@@ -125,18 +124,6 @@ def fit_text(text: str, width: int = LCD_WIDTH) -> str:
     return value
 
 
-def center_text(text: str, width: int = LCD_WIDTH) -> str:
-    value = fit_text(text, width)
-    return value.center(width)
-
-
-def balanced_text(text: str, width: int = LCD_WIDTH) -> str:
-    value = fit_text(text, width)
-    if len(value) >= width:
-        return value
-    return value
-
-
 def progress_bar(percent: int) -> str:
     clamped = max(0, min(100, percent))
     filled = (clamped * LCD_WIDTH) // 100
@@ -159,20 +146,20 @@ def parse_address(raw: str) -> int:
     return int(raw, 0)
 
 
-def extract_suffix(text: str, pattern: str) -> str:
-    match = re.search(pattern, text)
-    if not match:
-        return ""
-    return match.group(1)
-
-
-def build_line3(state: str, detail: str, retry_current: int, retry_total: int) -> str:
+def build_line3(
+    state: str,
+    detail: str,
+    retry_current: int,
+    retry_total: int,
+    attempt_current: int,
+    attempt_total: int,
+    seconds_left: int,
+) -> str:
     base = LINE3_TEXT.get(state, state)
 
     if state == "WAIT_DOCKER":
-        probe_value = extract_suffix(detail, r"Probe\s+([0-9]+/[0-9]+)")
-        if probe_value:
-            return to_ascii(f"Docker Check {probe_value}")
+        if attempt_current > 0 and attempt_total > 0:
+            return to_ascii(f"Docker Check {attempt_current}/{attempt_total}")
         return to_ascii(base)
 
     if state == "FETCH_COMPOSE":
@@ -193,29 +180,46 @@ def build_line3(state: str, detail: str, retry_current: int, retry_total: int) -
         return to_ascii(base)
 
     if state == "WAIT_BACKEND":
-        seconds_left = extract_suffix(detail, r"([0-9]+)s")
-        if seconds_left:
+        if seconds_left > 0:
             return to_ascii(f"Health in {seconds_left}s")
         return to_ascii(base)
 
     if state == "ERROR":
-        step_name = extract_suffix(detail, r"Step:\s*([A-Z_]+)")
-        if step_name:
-            return to_ascii(f"Fehler bei {step_name}")
+        if detail:
+            return to_ascii(f"Fehler bei {detail}")
         return to_ascii(base)
 
     return to_ascii(base)
 
 
-def build_lines(state: str, percent: int, detail: str, retry_current: int, retry_total: int):
-    step_index, step_total, phase_title = STATE_META.get(state, (0, 0, state))
+def build_lines(
+    state: str,
+    percent: int,
+    detail: str,
+    retry_current: int,
+    retry_total: int,
+    attempt_current: int,
+    attempt_total: int,
+    seconds_left: int,
+):
+    step_index, step_total = STATE_META.get(state, (0, 0))
     line1 = fit_text("Setup")
     if step_index > 0:
         line2 = fit_text(f"{step_index:02d}/{step_total:02d}")
     else:
         line2 = fit_text("??/??")
 
-    line3 = balanced_text(build_line3(state, detail, retry_current, retry_total))
+    line3 = fit_text(
+        build_line3(
+            state,
+            detail,
+            retry_current,
+            retry_total,
+            attempt_current,
+            attempt_total,
+            seconds_left,
+        )
+    )
 
     line4 = progress_bar(percent)
     return [line1, line2, line3, line4]
@@ -250,6 +254,9 @@ def main() -> int:
     parser.add_argument("--detail", default="", help="Additional detail text")
     parser.add_argument("--retry-current", type=int, default=0, help="Current retry attempt")
     parser.add_argument("--retry-total", type=int, default=0, help="Total retry attempts")
+    parser.add_argument("--attempt-current", type=int, default=0, help="Current progress attempt")
+    parser.add_argument("--attempt-total", type=int, default=0, help="Total progress attempts")
+    parser.add_argument("--seconds-left", type=int, default=0, help="Seconds remaining in the current phase")
     args = parser.parse_args()
 
     if os.environ.get("LCD_DISABLE", "0") == "1":
@@ -267,6 +274,9 @@ def main() -> int:
         detail=args.detail,
         retry_current=args.retry_current,
         retry_total=args.retry_total,
+        attempt_current=args.attempt_current,
+        attempt_total=args.attempt_total,
+        seconds_left=args.seconds_left,
     )
     initialize_display = not INIT_MARKER_PATH.exists()
     result = render(lines, bus_id, addresses, initialize_display)

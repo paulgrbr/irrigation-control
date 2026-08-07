@@ -13,9 +13,14 @@ devices. At every boot, the image downloads the current version from the
 | Frontend example | `nginx:1.27-alpine`             | `http://<pi-host>:8081`  |
 
 Portainer's first administrator is bootstrapped automatically during the Pi's
-first boot. The image creates a single admin account using the same credentials
-as the initial image user unless you override them at build time. Portainer then
-stores its state in the `portainer_data` Docker volume.
+first boot. The image creates the single `irrigation` admin account with the
+same password as the initial image user. Portainer stores its state in the
+`portainer_data` Docker volume.
+
+The shipped backend responds on `http://<pi-host>:8080/health`; the Pi bootstrap
+uses that endpoint as its readiness contract. If a replacement backend uses a
+different health URL, configure `BACKEND_HEALTH_URL` for
+`irrigation-control-bootstrap.service`.
 
 ## Updates
 

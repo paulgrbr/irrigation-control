@@ -28,16 +28,54 @@ image contains no Wi-Fi credentials or static network configuration.
 
 ## Runtime Deployment
 
-At every boot, `irrigation-control-bootstrap.service` waits for Docker and
-network connectivity, downloads the current
-`infrastructure/compose.yaml` from the public `main` branch, validates it, and
-starts the stack. The local downloaded definition is stored at
-`/opt/irrigation-control/compose.yaml`.
+The boot sequence is intentionally small and ordered:
+
+1. `irrigation-control-display-early.service` waits briefly for I2C and writes
+   `System startet` to the LCD. A missing LCD never fails the boot.
+2. Docker and network connectivity start normally.
+3. `irrigation-control-bootstrap.service` downloads the current
+   `infrastructure/compose.yaml` from the public `main` branch, validates it,
+   pulls images, starts the stack, initializes Portainer's first admin, and
+   waits for backend readiness.
+
+The downloaded Compose definition is cached at
+`/opt/irrigation-control/compose.yaml`. When download retries fail, the cached
+file is used. Image pulls are bounded to ten minutes and then continue with
+locally cached images when possible.
 
 The initial stack provides Portainer at `https://<pi-host>:9443` plus runnable
 backend and frontend example services on ports `8080` and `8081`. Details,
 including how to replace the examples with Docker Hub application images, are
 in `infrastructure/README.md`.
+
+## Runtime Configuration
+
+The defaults are suitable for the shipped Compose file. Set an environment
+variable on `irrigation-control-bootstrap.service` only when customizing the
+deployment.
+
+| Variable                         | Default                        | Purpose                                                         |
+| -------------------------------- | ------------------------------ | --------------------------------------------------------------- |
+| `BACKEND_HEALTH_URL`             | `http://127.0.0.1:8080/health` | URL that must return HTTP 200 before the LCD shows ready.       |
+| `BACKEND_READY_TIMEOUT_SECONDS`  | `300`                          | Maximum backend health wait.                                    |
+| `BACKEND_READY_INTERVAL_SECONDS` | `5`                            | Delay between backend health probes.                            |
+| `COMPOSE_PULL_TIMEOUT_SECONDS`   | `600`                          | Maximum image-pull duration before cached images are used.      |
+| `PORTAINER_URL`                  | `https://127.0.0.1:9443`       | Local Portainer API address.                                    |
+| `LCD_DISABLE`                    | `0`                            | Set to `1` to disable all LCD writes.                           |
+| `LCD_I2C_BUS`                    | `1`                            | I2C bus number.                                                 |
+| `LCD_I2C_ADDR`                   | `0x27`                         | LCD I2C address; `0x3f` is also tried when the default is used. |
+
+The LCD is an HD44780-compatible 20x4 display with an I2C backpack. The image
+enables `dtparam=i2c_arm=on` and loads `i2c-dev`. Verify wiring and the address
+with `sudo i2cdetect -y 1`.
+
+Useful first-boot diagnostics:
+
+```bash
+sudo systemctl status irrigation-control-display-early.service --no-pager
+sudo journalctl -u irrigation-control-bootstrap -b --no-pager
+sudo i2cdetect -y 1
+```
 
 ## Updates
 
@@ -56,7 +94,9 @@ reboot.
 ## Build
 
 The workflow at `.github/workflows/build-pi-image.yml` runs manually and for
-pushes to `main` that change the workflow or files below `pi-image/`.
+pushes to `main` that change the workflow, `pi-image/`, or the shipped Compose
+definition. Before building, it validates the image scripts, systemd units, LCD
+state formatting, runtime credential serialization, and `compose.yaml`.
 
 Before running it, add these repository Actions secrets:
 
@@ -66,8 +106,9 @@ Before running it, add these repository Actions secrets:
   macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value.
 - `PI_IMAGE_USER_PASSWORD`: A strong password for the `irrigation` user's local
   console login. pi-gen requires this to keep the configured username after
-  first boot. The same secret is also reused for Portainer's initial admin
-  account. SSH password authentication remains disabled.
+  first boot. The same secret creates the sole initial Portainer admin account
+  named `irrigation`. It must not contain a newline. SSH password
+  authentication remains disabled.
 
 The workflow validates both secrets before starting the image build. The
 password permits a local console login only. Because `pubkey-only-ssh: 1` is

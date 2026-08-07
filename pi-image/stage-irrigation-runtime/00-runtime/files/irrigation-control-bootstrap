@@ -12,6 +12,7 @@ backend_timeout_seconds="${BACKEND_READY_TIMEOUT_SECONDS:-300}"
 backend_interval_seconds="${BACKEND_READY_INTERVAL_SECONDS:-5}"
 download_retry_total="5"
 download_retry_delay_seconds="5"
+compose_pull_timeout_seconds="${COMPOSE_PULL_TIMEOUT_SECONDS:-600}"
 current_step="BOOTING"
 compose_candidate=""
 compose_source=""
@@ -49,7 +50,7 @@ display_update() {
 
 fail_with_step() {
 	local exit_code="$1"
-	display_update --state "ERROR" --percent 100 --detail "Step: ${current_step}"
+	display_update --state "ERROR" --percent 100 --detail "$current_step"
 	echo "[bootstrap] failed at step: ${current_step}" >&2
 	exit "$exit_code"
 }
@@ -61,39 +62,22 @@ on_error() {
 
 trap on_error ERR
 
-read_portainer_env_value() {
-	local variable_name="$1"
-	python3 - "$portainer_env_file" "$variable_name" <<'PY'
-import json
-import sys
-
-path, variable_name = sys.argv[1:]
-with open(path, encoding="utf-8") as env_file:
-    for line in env_file:
-        key, separator, value = line.rstrip("\n").partition("=")
-        if separator and key == variable_name:
-            print(json.loads(value))
-            break
-    else:
-        raise SystemExit(1)
-PY
-}
-
 load_portainer_credentials() {
 	if [ -n "$portainer_admin_username" ] && [ -n "$portainer_admin_password" ]; then
 		return
 	fi
 
-	if [ -f "$portainer_env_file" ]; then
-		local file_username file_password
-		if file_username="$(read_portainer_env_value "PORTAINER_ADMIN_USERNAME")" \
-			&& file_password="$(read_portainer_env_value "PORTAINER_ADMIN_PASSWORD")"; then
-			portainer_admin_username="${file_username:-$portainer_admin_username}"
-			portainer_admin_password="${file_password:-$portainer_admin_password}"
-		else
-			echo "[bootstrap] could not read portainer credentials: ${portainer_env_file}" >&2
-		fi
+	portainer_admin_username=""
+	portainer_admin_password=""
+	if [ ! -f "$portainer_env_file" ]; then
+		return
 	fi
+
+	# File is generated with Bash %q during image creation and is root-only.
+	# shellcheck disable=SC1090
+	. "$portainer_env_file"
+	portainer_admin_username="${PORTAINER_ADMIN_USERNAME:-}"
+	portainer_admin_password="${PORTAINER_ADMIN_PASSWORD:-}"
 }
 
 set_step() {
@@ -129,7 +113,11 @@ wait_for_docker() {
 
 		docker_percent="$((WAIT_DOCKER_PERCENT_START + (docker_probe * (WAIT_DOCKER_PERCENT_END - WAIT_DOCKER_PERCENT_START) / wait_docker_probe_total)))"
 		docker_percent="$(clamp_percent "$docker_percent" "$WAIT_DOCKER_PERCENT_START" "$WAIT_DOCKER_PERCENT_END")"
-		display_update --state "WAIT_DOCKER" --percent "$docker_percent" --detail "Probe ${docker_probe}/${wait_docker_probe_total}"
+		display_update \
+			--state "WAIT_DOCKER" \
+			--percent "$docker_percent" \
+			--attempt-current "$docker_probe" \
+			--attempt-total "$wait_docker_probe_total"
 		sleep "$wait_docker_probe_sleep_seconds"
 	done
 
@@ -226,7 +214,10 @@ bootstrap_portainer_admin() {
 
 	local deadline_seconds
 	deadline_seconds="$(( $(date +%s) + portainer_init_timeout_seconds ))"
-	wait_for_portainer_api "$deadline_seconds"
+	if ! wait_for_portainer_api "$deadline_seconds"; then
+		echo "[bootstrap] continuing without portainer admin initialization" >&2
+		return 0
+	fi
 
 	local payload response_code response_body
 	payload="$(PORTAINER_ADMIN_USERNAME="$portainer_admin_username" PORTAINER_ADMIN_PASSWORD="$portainer_admin_password" python3 - <<'PY'
@@ -255,18 +246,31 @@ PY
 			echo "[bootstrap] portainer admin init failed with HTTP ${response_code}" >&2
 			cat "$response_body" >&2 || true
 			rm -f "$response_body"
-			return 1
+			echo "[bootstrap] continuing without portainer admin initialization" >&2
+			return 0
 			;;
 	esac
 }
 
 pull_images_with_progress() {
 	local pull_percent="$PULL_PERCENT_START"
+	local pull_started_at
 	set_step "PULL_IMAGES" "PULL_IMAGES" "$pull_percent" "Images werden geladen"
 
 	"${compose_cmd[@]}" -f "$compose_file" pull &
 	local pull_pid="$!"
+	pull_started_at="$(date +%s)"
 	while kill -0 "$pull_pid" 2>/dev/null; do
+		local pull_elapsed
+		pull_elapsed="$(( $(date +%s) - pull_started_at ))"
+		if [ "$pull_elapsed" -ge "$compose_pull_timeout_seconds" ]; then
+			echo "[bootstrap] image pull timed out after ${compose_pull_timeout_seconds}s; using locally cached images" >&2
+			kill "$pull_pid" 2>/dev/null || true
+			wait "$pull_pid" || true
+			display_update --state "PULL_IMAGES" --percent "$PULL_PERCENT_END" --detail "Nutze lokale Images"
+			return
+		fi
+
 		if [ "$pull_percent" -lt "$PULL_PERCENT_END" ]; then
 			pull_percent="$((pull_percent + 1))"
 		fi
@@ -305,7 +309,10 @@ wait_for_backend_ready() {
 		backend_remaining="$((backend_timeout_seconds - backend_elapsed))"
 		backend_percent="$((WAIT_BACKEND_PERCENT_START + (backend_elapsed * (WAIT_BACKEND_PERCENT_END - WAIT_BACKEND_PERCENT_START) / backend_timeout_seconds)))"
 		backend_percent="$(clamp_percent "$backend_percent" "$WAIT_BACKEND_PERCENT_START" "$WAIT_BACKEND_PERCENT_END")"
-		display_update --state "WAIT_BACKEND" --percent "$backend_percent" --detail "Health in ${backend_remaining}s"
+		display_update \
+			--state "WAIT_BACKEND" \
+			--percent "$backend_percent" \
+			--seconds-left "$backend_remaining"
 		sleep "$backend_interval_seconds"
 	done
 }

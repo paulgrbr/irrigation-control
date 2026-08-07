@@ -2,19 +2,19 @@
 set -euo pipefail
 
 display_cmd="/usr/local/sbin/irrigation-control-display"
-attempts="${LCD_EARLY_ATTEMPTS:-25}"
-sleep_seconds="${LCD_EARLY_SLEEP_SECONDS:-0.2}"
+i2c_device="/dev/i2c-${LCD_I2C_BUS:-1}"
 
 if [ ! -x "$display_cmd" ]; then
 	exit 0
 fi
 
-for attempt in $(seq 1 "$attempts"); do
-	if "$display_cmd" --state "BOOTING" --percent 1 --detail "System startet"; then
+for attempt in {1..25}; do
+	if [ -e "$i2c_device" ] \
+		&& "$display_cmd" --state "BOOTING" --percent 1 --detail "System startet"; then
 		exit 0
 	fi
-	sleep "$sleep_seconds"
+	sleep 0.2
 done
 
-# Never fail the boot because of an optional LCD update.
+echo "[display-early] LCD unavailable: ${i2c_device}" >&2
 exit 0
