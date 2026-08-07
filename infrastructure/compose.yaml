@@ -1,0 +1,39 @@
+name: irrigation-control
+
+services:
+  portainer:
+    image: portainer/portainer-ce:2.21.5
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    restart: unless-stopped
+
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    # Update only containers that explicitly opt in via label.
+    command: --label-enable --cleanup --interval 3600
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  backend:
+    image: traefik/whoami:v1.10.3
+    ports:
+      - "8080:80"
+    labels:
+      # App services opt in to automated image refresh.
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:1.27-alpine
+    ports:
+      - "8081:80"
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    restart: unless-stopped
+
+volumes:
+  portainer_data:

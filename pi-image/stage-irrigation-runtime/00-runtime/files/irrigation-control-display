@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+# pyright: reportMissingImports=false
+import argparse
+import os
+import re
+import sys
+import time
+
+from smbus import SMBus
+
+LCD_WIDTH = 20
+LCD_BACKLIGHT = 0x08
+ENABLE_BIT = 0x04
+REGISTER_SELECT = 0x01
+LINE_ADDRESSES = [0x80, 0xC0, 0x94, 0xD4]
+
+STATE_META = {
+    "BOOTING": (1, 8, "Systemstart"),
+    "WAIT_DOCKER": (2, 8, "Docker startet"),
+    "FETCH_COMPOSE": (3, 8, "Konfig laden"),
+    "VALIDATE": (4, 8, "Konfig pruefen"),
+    "INSTALL": (5, 8, "Konfig speichern"),
+    "PULL_IMAGES": (6, 8, "Images laden"),
+    "START": (7, 8, "Container starten"),
+    "WAIT_BACKEND": (8, 8, "Backend startet"),
+    "READY": (8, 8, "Bereit"),
+    "ERROR": (8, 8, "Fehler"),
+}
+
+LINE3_TEXT = {
+    "BOOTING": "System wird bereit",
+    "WAIT_DOCKER": "Pruefe Docker",
+    "FETCH_COMPOSE": "Lade Konfig",
+    "VALIDATE": "Pruefe Konfig",
+    "INSTALL": "Speichere Konfig",
+    "PULL_IMAGES": "Lade Images",
+    "START": "Starte Container",
+    "WAIT_BACKEND": "Warte auf Health",
+    "READY": "Backend bereit",
+    "ERROR": "Setup fehlgeschlagen",
+}
+
+
+class HD44780Display:
+    def __init__(self, bus_id: int, address: int):
+        self.bus = SMBus(bus_id)
+        self.address = address
+
+    def close(self) -> None:
+        self.bus.close()
+
+    def _write_byte(self, value: int) -> None:
+        self.bus.write_byte(self.address, value)
+
+    def _pulse_enable(self, value: int) -> None:
+        self._write_byte(value | ENABLE_BIT)
+        time.sleep(0.0005)
+        self._write_byte(value & ~ENABLE_BIT)
+        time.sleep(0.0001)
+
+    def _write_4bit(self, value: int, mode: int = 0) -> None:
+        upper = mode | (value & 0xF0) | LCD_BACKLIGHT
+        lower = mode | ((value << 4) & 0xF0) | LCD_BACKLIGHT
+        self._write_byte(upper)
+        self._pulse_enable(upper)
+        self._write_byte(lower)
+        self._pulse_enable(lower)
+
+    def command(self, value: int) -> None:
+        self._write_4bit(value, mode=0)
+
+    def write_char(self, value: int) -> None:
+        self._write_4bit(value, mode=REGISTER_SELECT)
+
+    def initialize(self) -> None:
+        time.sleep(0.05)
+        self._write_4bit(0x30)
+        time.sleep(0.005)
+        self._write_4bit(0x30)
+        time.sleep(0.0002)
+        self._write_4bit(0x30)
+        self._write_4bit(0x20)
+
+        self.command(0x28)
+        self.command(0x0C)
+        self.command(0x06)
+        self.command(0x01)
+        time.sleep(0.002)
+
+    def write_line(self, line_index: int, text: str) -> None:
+        self.command(LINE_ADDRESSES[line_index])
+        padded = text[:LCD_WIDTH].ljust(LCD_WIDTH)
+        for char in padded:
+            self.write_char(ord(char))
+
+
+def to_ascii(text: str) -> str:
+    return text.encode("ascii", errors="replace").decode("ascii")
+
+
+def progress_bar(percent: int) -> str:
+    bar_width = 10
+    clamped = max(0, min(100, percent))
+    filled = (clamped * bar_width) // 100
+    if filled >= bar_width:
+        bar = "=" * bar_width
+    else:
+        head = ">" if filled > 0 else ""
+        bar = "=" * max(0, filled - 1) + head + "." * (bar_width - filled)
+    return f"[{bar}] {clamped:3d}%"
+
+
+def parse_address(raw: str) -> int:
+    return int(raw, 0)
+
+
+def extract_suffix(text: str, pattern: str) -> str:
+    match = re.search(pattern, text)
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def build_line3(state: str, detail: str, retry_current: int, retry_total: int) -> str:
+    base = LINE3_TEXT.get(state, state)
+
+    if state == "WAIT_DOCKER":
+        probe_value = extract_suffix(detail, r"Probe\s+([0-9]+/[0-9]+)")
+        if probe_value:
+            return to_ascii(f"Docker Check {probe_value}")
+        return to_ascii(base)
+
+    if state == "FETCH_COMPOSE":
+        if "lokalen Cache" in detail:
+            return to_ascii("Nutze Konfig-Cache")
+        if retry_current > 0 and retry_total > 0:
+            return to_ascii(f"Konfig Versuch {retry_current}/{retry_total}")
+        return to_ascii(base)
+
+    if state == "INSTALL":
+        if "Cache bleibt aktiv" in detail:
+            return to_ascii("Cache bleibt aktiv")
+        return to_ascii(base)
+
+    if state == "PULL_IMAGES":
+        if "lokale Images" in detail:
+            return to_ascii("Nutze lokale Images")
+        return to_ascii(base)
+
+    if state == "WAIT_BACKEND":
+        seconds_left = extract_suffix(detail, r"([0-9]+)s")
+        if seconds_left:
+            return to_ascii(f"Health in {seconds_left}s")
+        return to_ascii(base)
+
+    if state == "ERROR":
+        step_name = extract_suffix(detail, r"Step:\s*([A-Z_]+)")
+        if step_name:
+            return to_ascii(f"Fehler bei {step_name}")
+        return to_ascii(base)
+
+    return to_ascii(base)
+
+
+def build_lines(state: str, percent: int, detail: str, retry_current: int, retry_total: int):
+    step_index, step_total, phase_title = STATE_META.get(state, (0, 0, state))
+    line1 = "Irrigation Setup"
+    if step_index > 0:
+        line2 = to_ascii(f"Schritt {step_index}/{step_total}")
+    else:
+        line2 = to_ascii("Schritt ?/?")
+
+    line3 = build_line3(state, detail, retry_current, retry_total)
+
+    line4 = progress_bar(percent)
+    return [line1, line2, line3, line4]
+
+
+def render(lines, bus_id: int, addresses):
+    last_error = None
+    for address in addresses:
+        display = None
+        try:
+            display = HD44780Display(bus_id, address)
+            display.initialize()
+            for idx, line in enumerate(lines):
+                display.write_line(idx, line)
+            return 0
+        except OSError as error:
+            last_error = error
+        finally:
+            if display is not None:
+                display.close()
+
+    if last_error is not None:
+        sys.stderr.write(f"display update failed: {last_error}\n")
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Write first-boot progress to HD44780 I2C LCD")
+    parser.add_argument("--state", required=True, help="Current boot phase")
+    parser.add_argument("--percent", type=int, default=0, help="Progress percentage")
+    parser.add_argument("--detail", default="", help="Additional detail text")
+    parser.add_argument("--retry-current", type=int, default=0, help="Current retry attempt")
+    parser.add_argument("--retry-total", type=int, default=0, help="Total retry attempts")
+    args = parser.parse_args()
+
+    if os.environ.get("LCD_DISABLE", "0") == "1":
+        return 0
+
+    bus_id = int(os.environ.get("LCD_I2C_BUS", "1"))
+    primary_addr = parse_address(os.environ.get("LCD_I2C_ADDR", "0x27"))
+    addresses = [primary_addr]
+    if primary_addr == 0x27:
+        addresses.append(0x3F)
+
+    lines = build_lines(
+        state=args.state,
+        percent=args.percent,
+        detail=args.detail,
+        retry_current=args.retry_current,
+        retry_total=args.retry_total,
+    )
+    return render(lines, bus_id, addresses)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

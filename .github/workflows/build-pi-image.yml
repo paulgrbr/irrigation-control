@@ -18,7 +18,7 @@ env:
   PI_GEN_REPOSITORY: RPi-Distro/pi-gen
   PI_GEN_TAG: 2026-06-18-raspios-trixie-arm64
   RASPBERRY_PI_OS_RELEASE: trixie
-  PI_GEN_STAGES: stage0 stage1 stage2
+  PI_GEN_STAGES: stage0 stage1 stage2 ./pi-image/stage-irrigation-runtime
 
 jobs:
   build:

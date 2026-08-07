@@ -1,0 +1,207 @@
+#!/bin/bash
+set -euo pipefail
+
+compose_dir="/opt/irrigation-control"
+compose_file="${compose_dir}/compose.yaml"
+compose_url="https://raw.githubusercontent.com/paulgrbr/irrigation-control/main/infrastructure/compose.yaml"
+temporary_compose="$(mktemp)"
+display_cmd="/usr/local/sbin/irrigation-control-display"
+backend_health_url="${BACKEND_HEALTH_URL:-http://127.0.0.1:8080/health}"
+backend_timeout_seconds="${BACKEND_READY_TIMEOUT_SECONDS:-300}"
+backend_interval_seconds="${BACKEND_READY_INTERVAL_SECONDS:-5}"
+download_retry_total="5"
+download_retry_delay_seconds="5"
+current_step="BOOTING"
+compose_candidate=""
+compose_source=""
+
+wait_docker_probe_total="30"
+wait_docker_probe_sleep_seconds="2"
+wait_pull_progress_sleep_seconds="4"
+
+WAIT_DOCKER_PERCENT_START="10"
+WAIT_DOCKER_PERCENT_END="20"
+FETCH_COMPOSE_PERCENT="25"
+VALIDATE_PERCENT="40"
+INSTALL_PERCENT="50"
+PULL_PERCENT_START="65"
+PULL_PERCENT_END="79"
+START_PERCENT="80"
+WAIT_BACKEND_PERCENT_START="90"
+WAIT_BACKEND_PERCENT_END="99"
+READY_PERCENT="100"
+
+trap 'rm -f "$temporary_compose"' EXIT
+
+display_update() {
+	if [ -x "$display_cmd" ]; then
+		"$display_cmd" "$@" || true
+	fi
+}
+
+fail_with_step() {
+	local exit_code="$1"
+	display_update --state "ERROR" --percent 100 --detail "Step: ${current_step}"
+	echo "[bootstrap] failed at step: ${current_step}" >&2
+	exit "$exit_code"
+}
+
+on_error() {
+	local exit_code="$?"
+	fail_with_step "$exit_code"
+}
+
+trap on_error ERR
+
+set_step() {
+	current_step="$1"
+	local state="$2"
+	local percent="$3"
+	local detail="$4"
+	display_update --state "$state" --percent "$percent" --detail "$detail"
+}
+
+clamp_percent() {
+	local value="$1"
+	local min_value="$2"
+	local max_value="$3"
+	if [ "$value" -lt "$min_value" ]; then
+		echo "$min_value"
+		return
+	fi
+	if [ "$value" -gt "$max_value" ]; then
+		echo "$max_value"
+		return
+	fi
+	echo "$value"
+}
+
+wait_for_docker() {
+	set_step "WAIT_DOCKER" "WAIT_DOCKER" "$WAIT_DOCKER_PERCENT_START" "Docker wird geprueft"
+
+	for docker_probe in $(seq 1 "$wait_docker_probe_total"); do
+		if docker info >/dev/null 2>&1; then
+			return
+		fi
+
+		docker_percent="$((WAIT_DOCKER_PERCENT_START + (docker_probe * (WAIT_DOCKER_PERCENT_END - WAIT_DOCKER_PERCENT_START) / wait_docker_probe_total)))"
+		docker_percent="$(clamp_percent "$docker_percent" "$WAIT_DOCKER_PERCENT_START" "$WAIT_DOCKER_PERCENT_END")"
+		display_update --state "WAIT_DOCKER" --percent "$docker_percent" --detail "Probe ${docker_probe}/${wait_docker_probe_total}"
+		sleep "$wait_docker_probe_sleep_seconds"
+	done
+
+	echo "[bootstrap] docker daemon is not ready" >&2
+	false
+}
+
+fetch_compose_with_retry() {
+	set_step "FETCH_COMPOSE" "FETCH_COMPOSE" "$FETCH_COMPOSE_PERCENT" "Compose Download"
+
+	for download_try in $(seq 1 "$download_retry_total"); do
+		display_update \
+			--state "FETCH_COMPOSE" \
+			--percent "$FETCH_COMPOSE_PERCENT" \
+			--detail "Compose Download" \
+			--retry-current "$download_try" \
+			--retry-total "$download_retry_total"
+
+		if curl --fail --location --silent --show-error --output "$temporary_compose" "$compose_url"; then
+			compose_candidate="$temporary_compose"
+			compose_source="remote"
+			return
+		fi
+
+		if [ "$download_try" -eq "$download_retry_total" ]; then
+			if [ -f "$compose_file" ]; then
+				compose_candidate="$compose_file"
+				compose_source="local-cache"
+				echo "[bootstrap] compose download failed; using cached local compose: ${compose_file}" >&2
+				display_update --state "FETCH_COMPOSE" --percent "$FETCH_COMPOSE_PERCENT" --detail "Nutze lokalen Cache"
+				return
+			fi
+
+			echo "[bootstrap] compose download failed after ${download_retry_total} attempts and no local cache exists" >&2
+			false
+		fi
+
+		sleep "$download_retry_delay_seconds"
+	done
+}
+
+validate_and_install_compose() {
+	set_step "VALIDATE_COMPOSE" "VALIDATE" "$VALIDATE_PERCENT" "Datei pruefen"
+	docker compose -f "$compose_candidate" config --quiet
+
+	set_step "INSTALL_COMPOSE" "INSTALL" "$INSTALL_PERCENT" "Datei sichern"
+	if [ "$compose_source" = "remote" ]; then
+		install -m 0644 "$temporary_compose" "$compose_file"
+	else
+		echo "[bootstrap] keeping cached local compose: ${compose_file}" >&2
+		display_update --state "INSTALL" --percent "$INSTALL_PERCENT" --detail "Cache bleibt aktiv"
+	fi
+}
+
+pull_images_with_progress() {
+	local pull_percent="$PULL_PERCENT_START"
+	set_step "PULL_IMAGES" "PULL_IMAGES" "$pull_percent" "Images werden geladen"
+
+	docker compose -f "$compose_file" pull &
+	local pull_pid="$!"
+	while kill -0 "$pull_pid" 2>/dev/null; do
+		if [ "$pull_percent" -lt "$PULL_PERCENT_END" ]; then
+			pull_percent="$((pull_percent + 1))"
+		fi
+		display_update --state "PULL_IMAGES" --percent "$pull_percent" --detail "Images werden geladen"
+		sleep "$wait_pull_progress_sleep_seconds"
+	done
+	if ! wait "$pull_pid"; then
+		echo "[bootstrap] image pull failed; continuing with locally cached images" >&2
+		display_update --state "PULL_IMAGES" --percent "$PULL_PERCENT_END" --detail "Nutze lokale Images"
+	fi
+}
+
+start_compose_stack() {
+	set_step "START_CONTAINERS" "START" "$START_PERCENT" "Container starten"
+	docker compose -f "$compose_file" up -d --remove-orphans
+}
+
+wait_for_backend_ready() {
+	set_step "WAIT_BACKEND" "WAIT_BACKEND" "$WAIT_BACKEND_PERCENT_START" "Backend health"
+
+	local backend_start_time
+	backend_start_time="$(date +%s)"
+	while true; do
+		if curl --fail --silent --show-error --max-time 3 "$backend_health_url" >/dev/null; then
+			return
+		fi
+
+		local backend_now backend_elapsed backend_remaining backend_percent
+		backend_now="$(date +%s)"
+		backend_elapsed="$((backend_now - backend_start_time))"
+		if [ "$backend_elapsed" -ge "$backend_timeout_seconds" ]; then
+			echo "[bootstrap] backend readiness timed out after ${backend_timeout_seconds}s: ${backend_health_url}" >&2
+			false
+		fi
+
+		backend_remaining="$((backend_timeout_seconds - backend_elapsed))"
+		backend_percent="$((WAIT_BACKEND_PERCENT_START + (backend_elapsed * (WAIT_BACKEND_PERCENT_END - WAIT_BACKEND_PERCENT_START) / backend_timeout_seconds)))"
+		backend_percent="$(clamp_percent "$backend_percent" "$WAIT_BACKEND_PERCENT_START" "$WAIT_BACKEND_PERCENT_END")"
+		display_update --state "WAIT_BACKEND" --percent "$backend_percent" --detail "Health in ${backend_remaining}s"
+		sleep "$backend_interval_seconds"
+	done
+}
+
+mark_ready() {
+	set_step "READY" "READY" "$READY_PERCENT" "Backend ist bereit"
+}
+
+set_step "BOOTING" "BOOTING" "5" "System wird vorbereitet"
+
+install -d -m 0755 "$compose_dir"
+wait_for_docker
+fetch_compose_with_retry
+validate_and_install_compose
+pull_images_with_progress
+start_compose_stack
+wait_for_backend_ready
+mark_ready

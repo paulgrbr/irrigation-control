@@ -1,9 +1,57 @@
 # Raspberry Pi Image
 
 The GitHub Actions workflow builds a plain Raspberry Pi OS Lite image for ARM64
-devices. It currently uses the standard pi-gen stages `stage0`, `stage1`, and
-`stage2` only. No irrigation application, network configuration, packages, or
-custom services are installed yet.
+devices. It combines the standard pi-gen Lite stages with a project stage that
+installs Docker and configures the runtime deployment.
+
+## Current Configuration
+
+| Area              | Configuration                                             |
+| ----------------- | --------------------------------------------------------- |
+| Architecture      | ARM64                                                     |
+| Base system       | Raspberry Pi OS Trixie Lite                               |
+| pi-gen source     | `RPi-Distro/pi-gen` tag `2026-06-18-raspios-trixie-arm64` |
+| Build stages      | Lite stages plus `stage-irrigation-runtime`               |
+| Hostname          | `irrigation-control`                                      |
+| Initial user      | `irrigation`                                              |
+| Locale            | `de_DE.UTF-8`                                             |
+| Keyboard          | German layout and `de` keymap                             |
+| Timezone          | `Europe/Berlin`                                           |
+| SSH               | Enabled; public-key authentication only                   |
+| Container runtime | Docker Engine and Docker Compose                          |
+| Container updates | Watchtower checks labeled app containers hourly           |
+| Image format      | ZIP-compressed Lite image with SHA-256 checksum           |
+
+The `irrigation` user is created during the image build and is not renamed on
+first boot. Its local console password comes from a GitHub Actions secret. The
+image contains no Wi-Fi credentials or static network configuration.
+
+## Runtime Deployment
+
+At every boot, `irrigation-control-bootstrap.service` waits for Docker and
+network connectivity, downloads the current
+`infrastructure/compose.yaml` from the public `main` branch, validates it, and
+starts the stack. The local downloaded definition is stored at
+`/opt/irrigation-control/compose.yaml`.
+
+The initial stack provides Portainer at `https://<pi-host>:9443` plus runnable
+backend and frontend example services on ports `8080` and `8081`. Details,
+including how to replace the examples with Docker Hub application images, are
+in `infrastructure/README.md`.
+
+## Updates
+
+The project does not currently install or configure automatic operating-system
+package updates.
+In particular, the selected pi-gen Lite stages do not install
+`unattended-upgrades`. APT package-list refresh timers can still be supplied by
+the base operating system; refreshing package lists does not install updates.
+
+The application containers use Watchtower. It polls Docker Hub once per hour
+and updates only the `backend` and `frontend` containers, which have an explicit
+opt-in label. Portainer and Watchtower are not updated automatically. Changes
+to the Compose definition itself are downloaded and applied on the next Pi
+reboot.
 
 ## Build
 
@@ -21,14 +69,8 @@ Before running it, add these repository Actions secrets:
   first boot. SSH password authentication remains disabled.
 
 The workflow validates both secrets before starting the image build. The
-resulting image:
-
-- targets ARM64 Raspberry Pi devices;
-- is based on Raspberry Pi OS Trixie Lite;
-- uses hostname `irrigation-control`;
-- creates the `irrigation` user;
-- enables SSH public-key authentication only; and
-- uses German locale, keyboard layout, and the `Europe/Berlin` timezone.
+password permits a local console login only. Because `pubkey-only-ssh: 1` is
+configured, SSH password authentication remains disabled.
 
 After a successful build, download the `irrigation-control-lite-arm64` artifact
 from the workflow run and flash the ZIP image using Raspberry Pi Imager or a
@@ -53,6 +95,6 @@ controlled package mirror.
 
 ## Future Customization
 
-Custom pi-gen stages and filesystem overlays belong in this directory. Add such
-stages to the workflow's `stage-list` only when application installation or
-device-specific configuration is introduced.
+The custom pi-gen stage is `stage-irrigation-runtime`. Add later image-time
+configuration in another numbered directory below that stage, or add a separate
+external stage after it in the workflow's `stage-list`.
