@@ -3,13 +3,11 @@ import atexit
 import os
 import threading
 import time
-from dataclasses import dataclass
 
 from flask import Flask, jsonify
-from gpiozero import OutputDevice
+from periphery import GPIO
 from smbus2 import SMBus
 
-RELAY_ACTIVE_HIGH = False
 RELAY_TIME_SECONDS = 0.5
 RELAY_PAUSE_SECONDS = 0.3
 LCD_WIDTH = 20
@@ -19,22 +17,15 @@ LCD_REGISTER_SELECT = 0x01
 LCD_LINE_ADDRESSES = (0x80, 0xC0, 0x94, 0xD4)
 
 
-@dataclass(frozen=True)
-class Relay:
-    number: int
-    gpio: int
-    color: str
-
-
 RELAYS = (
-    Relay(1, 17, "braun"),
-    Relay(2, 27, "rot"),
-    Relay(3, 22, "orange"),
-    Relay(4, 10, "gelb"),
-    Relay(5, 5, "gruen"),
-    Relay(6, 9, "blau"),
-    Relay(7, 6, "lila"),
-    Relay(8, 11, "grau"),
+    (17, "braun"),
+    (27, "rot"),
+    (22, "orange"),
+    (10, "gelb"),
+    (5, "gruen"),
+    (9, "blau"),
+    (6, "lila"),
+    (11, "grau"),
 )
 
 
@@ -107,7 +98,7 @@ class LCD:
 app = Flask(__name__)
 lcd = LCD()
 status = {"state": "starting", "current_relay": None, "error": None}
-relay_devices: list[OutputDevice] = []
+relay_devices = []
 
 
 def update_display(line3: str, line4: str) -> None:
@@ -117,20 +108,17 @@ def update_display(line3: str, line4: str) -> None:
 def run_relay_test() -> None:
     try:
         update_display("Relais-Test", "Bitte warten")
-        for relay in RELAYS:
-            device = OutputDevice(
-                relay.gpio,
-                active_high=RELAY_ACTIVE_HIGH,
-                initial_value=False,
-            )
+        for gpio, _ in RELAYS:
+            device = GPIO("/dev/gpiochip0", gpio, "out")
+            device.write(True)
             relay_devices.append(device)
 
-        for relay, device in zip(RELAYS, relay_devices, strict=True):
-            status["current_relay"] = relay.number
-            update_display(f"Relais {relay.number}/{len(RELAYS)} EIN", f"GPIO {relay.gpio} {relay.color}")
-            device.on()
+        for number, ((gpio, color), device) in enumerate(zip(RELAYS, relay_devices), start=1):
+            status["current_relay"] = number
+            update_display(f"Relais {number}/{len(RELAYS)} EIN", f"GPIO {gpio} {color}")
+            device.write(False)
             time.sleep(RELAY_TIME_SECONDS)
-            device.off()
+            device.write(True)
             time.sleep(RELAY_PAUSE_SECONDS)
 
         status["state"] = "ready"
@@ -143,13 +131,14 @@ def run_relay_test() -> None:
         print(f"Relay test failed: {error}", flush=True)
     finally:
         for device in relay_devices:
-            device.off()
+            device.write(True)
 
 
 @atexit.register
-def turn_relays_off() -> None:
+def close_devices() -> None:
     for device in relay_devices:
-        device.off()
+        device.write(True)
+        device.close()
     lcd.close()
 
 
