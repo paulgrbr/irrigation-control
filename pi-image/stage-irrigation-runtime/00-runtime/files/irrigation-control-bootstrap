@@ -15,10 +15,16 @@ download_retry_delay_seconds="5"
 current_step="BOOTING"
 compose_candidate=""
 compose_source=""
+portainer_url="${PORTAINER_URL:-https://127.0.0.1:9443}"
+portainer_admin_username="${PORTAINER_ADMIN_USERNAME:-}"
+portainer_admin_password="${PORTAINER_ADMIN_PASSWORD:-}"
+portainer_init_timeout_seconds="${PORTAINER_INIT_TIMEOUT_SECONDS:-120}"
+portainer_init_retry_seconds="${PORTAINER_INIT_RETRY_SECONDS:-3}"
 
 wait_docker_probe_total="30"
 wait_docker_probe_sleep_seconds="2"
 wait_pull_progress_sleep_seconds="4"
+phase_transition_sleep_seconds="0.5"
 
 WAIT_DOCKER_PERCENT_START="10"
 WAIT_DOCKER_PERCENT_END="20"
@@ -28,6 +34,7 @@ INSTALL_PERCENT="50"
 PULL_PERCENT_START="65"
 PULL_PERCENT_END="79"
 START_PERCENT="80"
+PORTAINER_INIT_PERCENT="85"
 WAIT_BACKEND_PERCENT_START="90"
 WAIT_BACKEND_PERCENT_END="99"
 READY_PERCENT="100"
@@ -62,6 +69,10 @@ set_step() {
 	display_update --state "$state" --percent "$percent" --detail "$detail"
 }
 
+hold_phase() {
+	sleep "$phase_transition_sleep_seconds"
+}
+
 clamp_percent() {
 	local value="$1"
 	local min_value="$2"
@@ -79,6 +90,7 @@ clamp_percent() {
 
 wait_for_docker() {
 	set_step "WAIT_DOCKER" "WAIT_DOCKER" "$WAIT_DOCKER_PERCENT_START" "Docker wird geprueft"
+	hold_phase
 
 	for docker_probe in $(seq 1 "$wait_docker_probe_total"); do
 		if docker info >/dev/null 2>&1; then
@@ -142,6 +154,7 @@ fetch_compose_with_retry() {
 
 		sleep "$download_retry_delay_seconds"
 	done
+	hold_phase
 }
 
 validate_and_install_compose() {
@@ -155,6 +168,69 @@ validate_and_install_compose() {
 		echo "[bootstrap] keeping cached local compose: ${compose_file}" >&2
 		display_update --state "INSTALL" --percent "$INSTALL_PERCENT" --detail "Cache bleibt aktiv"
 	fi
+	hold_phase
+}
+
+wait_for_portainer_api() {
+	local deadline_seconds="${1:?missing deadline}"
+	local status_url="${portainer_url}/api/status"
+	local current_time
+	current_time="$(date +%s)"
+	while [ "$current_time" -lt "$deadline_seconds" ]; do
+		if curl --insecure --fail --silent --show-error --max-time 3 "$status_url" >/dev/null; then
+			return 0
+		fi
+		sleep "$portainer_init_retry_seconds"
+		current_time="$(date +%s)"
+	done
+
+	echo "[bootstrap] portainer api did not become ready: ${status_url}" >&2
+	return 1
+}
+
+bootstrap_portainer_admin() {
+	if [ -z "$portainer_admin_username" ] || [ -z "$portainer_admin_password" ]; then
+		echo "[bootstrap] portainer credentials not configured; skipping admin init" >&2
+		return 0
+	fi
+
+	set_step "PORTAINER_INIT" "PORTAINER_INIT" "$PORTAINER_INIT_PERCENT" "Portainer einrichten"
+	hold_phase
+
+	local deadline_seconds
+	deadline_seconds="$(( $(date +%s) + portainer_init_timeout_seconds ))"
+	wait_for_portainer_api "$deadline_seconds"
+
+	local payload response_code response_body
+	payload="$(PORTAINER_ADMIN_USERNAME="$portainer_admin_username" PORTAINER_ADMIN_PASSWORD="$portainer_admin_password" python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "Username": os.environ["PORTAINER_ADMIN_USERNAME"],
+    "Password": os.environ["PORTAINER_ADMIN_PASSWORD"],
+}))
+PY
+)"
+	response_body="$(mktemp)"
+	response_code="$(curl --insecure --silent --show-error --output "$response_body" --write-out '%{http_code}' --request POST "${portainer_url}/api/users/admin/init" --header 'Content-Type: application/json' --data "$payload" || true)"
+	case "$response_code" in
+		200|201|204|409)
+			if [ "$response_code" = "409" ]; then
+				echo "[bootstrap] portainer admin already initialized" >&2
+			else
+				echo "[bootstrap] portainer admin initialized" >&2
+			fi
+			rm -f "$response_body"
+			return 0
+			;;
+		*)
+			echo "[bootstrap] portainer admin init failed with HTTP ${response_code}" >&2
+			cat "$response_body" >&2 || true
+			rm -f "$response_body"
+			return 1
+			;;
+	esac
 }
 
 pull_images_with_progress() {
@@ -174,15 +250,18 @@ pull_images_with_progress() {
 		echo "[bootstrap] image pull failed; continuing with locally cached images" >&2
 		display_update --state "PULL_IMAGES" --percent "$PULL_PERCENT_END" --detail "Nutze lokale Images"
 	fi
+	hold_phase
 }
 
 start_compose_stack() {
 	set_step "START_CONTAINERS" "START" "$START_PERCENT" "Container starten"
 	"${compose_cmd[@]}" -f "$compose_file" up -d --remove-orphans
+	hold_phase
 }
 
 wait_for_backend_ready() {
 	set_step "WAIT_BACKEND" "WAIT_BACKEND" "$WAIT_BACKEND_PERCENT_START" "Backend health"
+	hold_phase
 
 	local backend_start_time
 	backend_start_time="$(date +%s)"
@@ -220,5 +299,6 @@ fetch_compose_with_retry
 validate_and_install_compose
 pull_images_with_progress
 start_compose_stack
+bootstrap_portainer_admin
 wait_for_backend_ready
 mark_ready

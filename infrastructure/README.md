@@ -12,8 +12,10 @@ devices. At every boot, the image downloads the current version from the
 | Backend example  | `traefik/whoami:v1.10.3`        | `http://<pi-host>:8080`  |
 | Frontend example | `nginx:1.27-alpine`             | `http://<pi-host>:8081`  |
 
-Portainer asks for its administrator password on first access and stores its
-state in the `portainer_data` Docker volume.
+Portainer's first administrator is bootstrapped automatically during the Pi's
+first boot. The image creates a single admin account using the same credentials
+as the initial image user unless you override them at build time. Portainer then
+stores its state in the `portainer_data` Docker volume.
 
 ## Updates
 

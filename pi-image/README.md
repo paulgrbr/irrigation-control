@@ -66,7 +66,8 @@ Before running it, add these repository Actions secrets:
   macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value.
 - `PI_IMAGE_USER_PASSWORD`: A strong password for the `irrigation` user's local
   console login. pi-gen requires this to keep the configured username after
-  first boot. SSH password authentication remains disabled.
+  first boot. The same secret is also reused for Portainer's initial admin
+  account. SSH password authentication remains disabled.
 
 The workflow validates both secrets before starting the image build. The
 password permits a local console login only. Because `pubkey-only-ssh: 1` is

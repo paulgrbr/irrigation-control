@@ -55,6 +55,9 @@ jobs:
 
       - name: Build image
         id: build
+        env:
+          PORTAINER_ADMIN_USERNAME: irrigation
+          PORTAINER_ADMIN_PASSWORD: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
         uses: usimd/pi-gen-action@cec66cba86bdcd23984e6a79ea4e9251d90bc798 # v1
         with:
           image-name: ${{ env.IMAGE_NAME }}
