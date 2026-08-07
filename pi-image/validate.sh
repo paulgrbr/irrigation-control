@@ -70,7 +70,8 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 PY
 
 config_file="$(mktemp)"
-trap 'rm -f "$config_file"' EXIT
+unit_root="$(mktemp -d)"
+trap 'rm -f "$config_file"; rm -rf "$unit_root"' EXIT
 test_password='space quote" dollar$ slash\ single'"'"'quote'
 {
 	printf 'PORTAINER_ADMIN_USERNAME=%q\n' "irrigation"
@@ -83,9 +84,21 @@ unset PORTAINER_ADMIN_USERNAME PORTAINER_ADMIN_PASSWORD
 [[ "$PORTAINER_ADMIN_PASSWORD" = "$test_password" ]]
 
 if command -v systemd-analyze >/dev/null 2>&1; then
-	systemd-analyze verify \
+	install -D -m 0755 \
+		"${runtime_dir}/files/irrigation-control-bootstrap" \
+		"${unit_root}/usr/local/sbin/irrigation-control-bootstrap"
+	install -D -m 0755 \
+		"${runtime_dir}/files/irrigation-control-display-early" \
+		"${unit_root}/usr/local/sbin/irrigation-control-display-early"
+	install -D -m 0644 \
 		"${runtime_dir}/files/irrigation-control-bootstrap.service" \
-		"${runtime_dir}/files/irrigation-control-display-early.service"
+		"${unit_root}/etc/systemd/system/irrigation-control-bootstrap.service"
+	install -D -m 0644 \
+		"${runtime_dir}/files/irrigation-control-display-early.service" \
+		"${unit_root}/etc/systemd/system/irrigation-control-display-early.service"
+	systemd-analyze verify --root="$unit_root" \
+		irrigation-control-bootstrap.service \
+		irrigation-control-display-early.service
 fi
 
 docker compose -f "${repo_root}/infrastructure/compose.yaml" config --quiet
