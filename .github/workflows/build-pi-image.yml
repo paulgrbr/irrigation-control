@@ -1,0 +1,51 @@
+name: Build Raspberry Pi Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-pi-image.yml
+      - pi-image/**
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Raspberry Pi OS Lite (ARM64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build image
+        id: build
+        uses: usimd/pi-gen-action@v1
+        with:
+          image-name: irrigation-control-lite
+          pi-gen-version: arm64
+          release: trixie
+          stage-list: stage0 stage1 stage2
+          export-last-stage-only: true
+          compression: zip
+          hostname: irrigation-control
+          username: irrigation
+          enable-ssh: 1
+          pubkey-only-ssh: 1
+          disable-first-boot-user-rename: 1
+          pubkey-ssh-first-user: ${{ secrets.PI_IMAGE_SSH_PUBLIC_KEY }}
+          timezone: Europe/Berlin
+          locale: de_DE.UTF-8
+          keyboard-keymap: de
+          keyboard-layout: German
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: irrigation-control-lite-arm64
+          path: ${{ steps.build.outputs.image-path }}
+          if-no-files-found: error
+          retention-days: 14
