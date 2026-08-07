@@ -24,9 +24,15 @@ jobs:
       - name: Validate SSH public key
         env:
           SSH_PUBLIC_KEY: ${{ secrets.PI_IMAGE_SSH_PUBLIC_KEY }}
+          USER_PASSWORD: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
         run: |
           if [ -z "$SSH_PUBLIC_KEY" ]; then
             echo "PI_IMAGE_SSH_PUBLIC_KEY is not set."
+            exit 1
+          fi
+
+          if [ -z "$USER_PASSWORD" ]; then
+            echo "PI_IMAGE_USER_PASSWORD is not set."
             exit 1
           fi
 
@@ -52,6 +58,7 @@ jobs:
           compression: zip
           hostname: irrigation-control
           username: irrigation
+          password: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
           enable-ssh: 1
           pubkey-only-ssh: 1
           disable-first-boot-user-rename: 1

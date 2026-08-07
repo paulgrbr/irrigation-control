@@ -10,13 +10,18 @@ custom services are installed yet.
 The workflow at `.github/workflows/build-pi-image.yml` runs manually and for
 pushes to `main` that change the workflow or files below `pi-image/`.
 
-Before running it, add the repository Actions secret
-`PI_IMAGE_SSH_PUBLIC_KEY`. Its value must be one complete OpenSSH public-key
-line, for example the contents of a `.pub` key file. Do not store a private key,
-a PEM file, shell command, quotation marks, or Markdown code fences in this
-secret. On macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value. The
-workflow validates this secret before starting the image build. The resulting
-image:
+Before running it, add these repository Actions secrets:
+
+- `PI_IMAGE_SSH_PUBLIC_KEY`: One complete OpenSSH public-key line, for example
+  the contents of a `.pub` key file. Do not store a private key, a PEM file,
+  shell command, quotation marks, or Markdown code fences in this secret. On
+  macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value.
+- `PI_IMAGE_USER_PASSWORD`: A strong password for the `irrigation` user's local
+  console login. pi-gen requires this to keep the configured username after
+  first boot. SSH password authentication remains disabled.
+
+The workflow validates both secrets before starting the image build. The
+resulting image:
 
 - targets ARM64 Raspberry Pi devices;
 - is based on Raspberry Pi OS Trixie Lite;
