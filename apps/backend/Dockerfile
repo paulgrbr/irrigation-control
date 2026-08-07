@@ -1,0 +1,18 @@
+FROM python:3.13-alpine
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apk add --no-cache --virtual .build-dependencies build-base linux-headers
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && apk del .build-dependencies
+
+COPY src ./src
+
+EXPOSE 8080
+
+CMD ["python", "src/app.py"]

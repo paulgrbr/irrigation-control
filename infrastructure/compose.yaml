@@ -19,9 +19,14 @@ services:
     restart: unless-stopped
 
   backend:
-    image: traefik/whoami:v1.10.3
+    image: paulgrbr/irrigation-control-backend:latest
     ports:
-      - "8080:80"
+      - "8080:8080"
+    privileged: true
+    environment:
+      GPIOZERO_PIN_FACTORY: lgpio
+      LCD_I2C_BUS: "1"
+      LCD_I2C_ADDR: "0x27"
     labels:
       # App services opt in to automated image refresh.
       com.centurylinklabs.watchtower.enable: "true"

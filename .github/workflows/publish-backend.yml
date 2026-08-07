@@ -1,0 +1,50 @@
+name: Publish Backend Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-backend.yml
+      - apps/backend/**
+
+permissions:
+  contents: read
+
+env:
+  BACKEND_IMAGE: paulgrbr/irrigation-control-backend
+
+jobs:
+  publish:
+    name: Build and push ARM64 backend
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate Docker Hub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be set."
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+
+      - name: Build and push backend image
+        run: |
+          docker build --pull \
+            --tag "${BACKEND_IMAGE}:latest" \
+            --tag "${BACKEND_IMAGE}:${GITHUB_SHA}" \
+            apps/backend
+          docker push "${BACKEND_IMAGE}:latest"
+          docker push "${BACKEND_IMAGE}:${GITHUB_SHA}"
