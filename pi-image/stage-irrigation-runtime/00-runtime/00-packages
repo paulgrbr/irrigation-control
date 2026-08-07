@@ -1,7 +1,7 @@
 # Container runtime and tools needed by the boot-time deployment sync.
 
 docker.io
-docker-compose-v2
+docker-compose-plugin
 curl
 ca-certificates
 python3
