@@ -24,4 +24,5 @@ i2c-dev
 EOF
 
 systemctl enable docker.service
+systemctl enable irrigation-control-display-early.service
 systemctl enable irrigation-control-bootstrap.service

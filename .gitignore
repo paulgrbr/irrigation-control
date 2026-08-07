@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local SSH keys used while testing Raspberry Pi images.
+pi-image/ssh/
+
 # C extensions
 *.so
 
@@ -216,5 +219,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-temp
-temp.pub

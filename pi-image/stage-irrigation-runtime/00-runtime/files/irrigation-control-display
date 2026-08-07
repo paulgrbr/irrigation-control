@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 from smbus import SMBus
 
@@ -16,15 +17,16 @@ LINE_ADDRESSES = [0x80, 0xC0, 0x94, 0xD4]
 FULL_BLOCK_CHAR = "\x00"
 ARROW_CHAR = "\x01"
 SHADE_CHAR = "\x02"
+INIT_MARKER_PATH = Path("/run/irrigation-control-display.initialized")
 
 STATE_META = {
-    "BOOTING": (1, 8, "Systemstart"),
-    "WAIT_DOCKER": (2, 8, "Docker startet"),
-    "FETCH_COMPOSE": (3, 8, "Konfig laden"),
-    "VALIDATE": (4, 8, "Konfig pruefen"),
-    "INSTALL": (5, 8, "Konfig speichern"),
-    "PULL_IMAGES": (6, 8, "Images laden"),
-    "START": (7, 8, "Container starten"),
+    "BOOTING": (1, 9, "Systemstart"),
+    "WAIT_DOCKER": (2, 9, "Docker startet"),
+    "FETCH_COMPOSE": (3, 9, "Konfig laden"),
+    "VALIDATE": (4, 9, "Konfig pruefen"),
+    "INSTALL": (5, 9, "Konfig speichern"),
+    "PULL_IMAGES": (6, 9, "Images laden"),
+    "START": (7, 9, "Container starten"),
     "PORTAINER_INIT": (8, 9, "Portainer einrichten"),
     "WAIT_BACKEND": (9, 9, "Backend startet"),
     "READY": (9, 9, "Bereit"),
@@ -32,7 +34,7 @@ STATE_META = {
 }
 
 LINE3_TEXT = {
-    "BOOTING": "System wird bereit",
+    "BOOTING": "System startet",
     "WAIT_DOCKER": "Pruefe Docker",
     "FETCH_COMPOSE": "Lade Konfig",
     "VALIDATE": "Pruefe Konfig",
@@ -103,8 +105,7 @@ class HD44780Display:
         self._write_custom_char(2, [0x00, 0x0A, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00])
         self.command(0x0C)
         self.command(0x06)
-        self.command(0x01)
-        time.sleep(0.002)
+
 
     def write_line(self, line_index: int, text: str) -> None:
         self.command(LINE_ADDRESSES[line_index])
@@ -133,7 +134,7 @@ def balanced_text(text: str, width: int = LCD_WIDTH) -> str:
     value = fit_text(text, width)
     if len(value) >= width:
         return value
-    return value.center(width)
+    return value
 
 
 def progress_bar(percent: int) -> str:
@@ -208,11 +209,11 @@ def build_line3(state: str, detail: str, retry_current: int, retry_total: int) -
 
 def build_lines(state: str, percent: int, detail: str, retry_current: int, retry_total: int):
     step_index, step_total, phase_title = STATE_META.get(state, (0, 0, state))
-    line1 = center_text("Setup")
+    line1 = fit_text("Setup")
     if step_index > 0:
-        line2 = center_text(f"{step_index:02d}/{step_total:02d}")
+        line2 = fit_text(f"{step_index:02d}/{step_total:02d}")
     else:
-        line2 = center_text("??/??")
+        line2 = fit_text("??/??")
 
     line3 = balanced_text(build_line3(state, detail, retry_current, retry_total))
 
@@ -220,13 +221,14 @@ def build_lines(state: str, percent: int, detail: str, retry_current: int, retry
     return [line1, line2, line3, line4]
 
 
-def render(lines, bus_id: int, addresses):
+def render(lines, bus_id: int, addresses, initialize_display: bool):
     last_error = None
     for address in addresses:
         display = None
         try:
             display = HD44780Display(bus_id, address)
-            display.initialize()
+            if initialize_display:
+                display.initialize()
             for idx, line in enumerate(lines):
                 display.write_line(idx, line)
             return 0
@@ -266,7 +268,16 @@ def main() -> int:
         retry_current=args.retry_current,
         retry_total=args.retry_total,
     )
-    return render(lines, bus_id, addresses)
+    initialize_display = not INIT_MARKER_PATH.exists()
+    result = render(lines, bus_id, addresses, initialize_display)
+    if result == 0 and initialize_display:
+        try:
+            INIT_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+            INIT_MARKER_PATH.touch(exist_ok=True)
+        except OSError:
+            # Display update succeeded; marker failure is non-fatal.
+            pass
+    return result
 
 
 if __name__ == "__main__":

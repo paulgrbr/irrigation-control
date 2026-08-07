@@ -20,11 +20,11 @@ portainer_admin_username="${PORTAINER_ADMIN_USERNAME:-}"
 portainer_admin_password="${PORTAINER_ADMIN_PASSWORD:-}"
 portainer_init_timeout_seconds="${PORTAINER_INIT_TIMEOUT_SECONDS:-120}"
 portainer_init_retry_seconds="${PORTAINER_INIT_RETRY_SECONDS:-3}"
+portainer_env_file="/etc/default/irrigation-control-bootstrap"
 
 wait_docker_probe_total="30"
 wait_docker_probe_sleep_seconds="2"
 wait_pull_progress_sleep_seconds="4"
-phase_transition_sleep_seconds="0.5"
 
 WAIT_DOCKER_PERCENT_START="10"
 WAIT_DOCKER_PERCENT_END="20"
@@ -61,16 +61,47 @@ on_error() {
 
 trap on_error ERR
 
+read_portainer_env_value() {
+	local variable_name="$1"
+	python3 - "$portainer_env_file" "$variable_name" <<'PY'
+import json
+import sys
+
+path, variable_name = sys.argv[1:]
+with open(path, encoding="utf-8") as env_file:
+    for line in env_file:
+        key, separator, value = line.rstrip("\n").partition("=")
+        if separator and key == variable_name:
+            print(json.loads(value))
+            break
+    else:
+        raise SystemExit(1)
+PY
+}
+
+load_portainer_credentials() {
+	if [ -n "$portainer_admin_username" ] && [ -n "$portainer_admin_password" ]; then
+		return
+	fi
+
+	if [ -f "$portainer_env_file" ]; then
+		local file_username file_password
+		if file_username="$(read_portainer_env_value "PORTAINER_ADMIN_USERNAME")" \
+			&& file_password="$(read_portainer_env_value "PORTAINER_ADMIN_PASSWORD")"; then
+			portainer_admin_username="${file_username:-$portainer_admin_username}"
+			portainer_admin_password="${file_password:-$portainer_admin_password}"
+		else
+			echo "[bootstrap] could not read portainer credentials: ${portainer_env_file}" >&2
+		fi
+	fi
+}
+
 set_step() {
 	current_step="$1"
 	local state="$2"
 	local percent="$3"
 	local detail="$4"
 	display_update --state "$state" --percent "$percent" --detail "$detail"
-}
-
-hold_phase() {
-	sleep "$phase_transition_sleep_seconds"
 }
 
 clamp_percent() {
@@ -90,7 +121,6 @@ clamp_percent() {
 
 wait_for_docker() {
 	set_step "WAIT_DOCKER" "WAIT_DOCKER" "$WAIT_DOCKER_PERCENT_START" "Docker wird geprueft"
-	hold_phase
 
 	for docker_probe in $(seq 1 "$wait_docker_probe_total"); do
 		if docker info >/dev/null 2>&1; then
@@ -154,7 +184,6 @@ fetch_compose_with_retry() {
 
 		sleep "$download_retry_delay_seconds"
 	done
-	hold_phase
 }
 
 validate_and_install_compose() {
@@ -168,7 +197,6 @@ validate_and_install_compose() {
 		echo "[bootstrap] keeping cached local compose: ${compose_file}" >&2
 		display_update --state "INSTALL" --percent "$INSTALL_PERCENT" --detail "Cache bleibt aktiv"
 	fi
-	hold_phase
 }
 
 wait_for_portainer_api() {
@@ -195,7 +223,6 @@ bootstrap_portainer_admin() {
 	fi
 
 	set_step "PORTAINER_INIT" "PORTAINER_INIT" "$PORTAINER_INIT_PERCENT" "Portainer einrichten"
-	hold_phase
 
 	local deadline_seconds
 	deadline_seconds="$(( $(date +%s) + portainer_init_timeout_seconds ))"
@@ -250,18 +277,15 @@ pull_images_with_progress() {
 		echo "[bootstrap] image pull failed; continuing with locally cached images" >&2
 		display_update --state "PULL_IMAGES" --percent "$PULL_PERCENT_END" --detail "Nutze lokale Images"
 	fi
-	hold_phase
 }
 
 start_compose_stack() {
 	set_step "START_CONTAINERS" "START" "$START_PERCENT" "Container starten"
 	"${compose_cmd[@]}" -f "$compose_file" up -d --remove-orphans
-	hold_phase
 }
 
 wait_for_backend_ready() {
 	set_step "WAIT_BACKEND" "WAIT_BACKEND" "$WAIT_BACKEND_PERCENT_START" "Backend health"
-	hold_phase
 
 	local backend_start_time
 	backend_start_time="$(date +%s)"
@@ -293,6 +317,7 @@ mark_ready() {
 set_step "BOOTING" "BOOTING" "5" "System wird vorbereitet"
 
 install -d -m 0755 "$compose_dir"
+load_portainer_credentials
 wait_for_docker
 detect_compose_command
 fetch_compose_with_retry

@@ -1,0 +1,14 @@
+[Unit]
+Description=Show early LCD boot status
+DefaultDependencies=no
+Wants=systemd-modules-load.service
+After=systemd-modules-load.service
+Before=sysinit.target basic.target network-online.target docker.service irrigation-control-bootstrap.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/irrigation-control-display-early
+TimeoutStartSec=6s
+
+[Install]
+WantedBy=sysinit.target

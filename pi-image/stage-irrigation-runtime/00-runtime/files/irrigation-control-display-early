@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+
+display_cmd="/usr/local/sbin/irrigation-control-display"
+attempts="${LCD_EARLY_ATTEMPTS:-25}"
+sleep_seconds="${LCD_EARLY_SLEEP_SECONDS:-0.2}"
+
+if [ ! -x "$display_cmd" ]; then
+	exit 0
+fi
+
+for attempt in $(seq 1 "$attempts"); do
+	if "$display_cmd" --state "BOOTING" --percent 1 --detail "System startet"; then
+		exit 0
+	fi
+	sleep "$sleep_seconds"
+done
+
+# Never fail the boot because of an optional LCD update.
+exit 0

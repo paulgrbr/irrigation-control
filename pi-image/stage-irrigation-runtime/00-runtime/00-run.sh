@@ -19,7 +19,11 @@ PY
 fi
 install -m 0755 files/irrigation-control-bootstrap \
   "${ROOTFS_DIR}/usr/local/sbin/irrigation-control-bootstrap"
+install -m 0755 files/irrigation-control-display-early \
+  "${ROOTFS_DIR}/usr/local/sbin/irrigation-control-display-early"
 install -m 0755 files/irrigation-control-display \
   "${ROOTFS_DIR}/usr/local/sbin/irrigation-control-display"
+install -m 0644 files/irrigation-control-display-early.service \
+  "${ROOTFS_DIR}/etc/systemd/system/irrigation-control-display-early.service"
 install -m 0644 files/irrigation-control-bootstrap.service \
   "${ROOTFS_DIR}/etc/systemd/system/irrigation-control-bootstrap.service"
