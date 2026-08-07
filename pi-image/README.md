@@ -12,7 +12,11 @@ pushes to `main` that change the workflow or files below `pi-image/`.
 
 Before running it, add the repository Actions secret
 `PI_IMAGE_SSH_PUBLIC_KEY`. Its value must be one complete OpenSSH public-key
-line, for example the contents of a `.pub` key file. The resulting image:
+line, for example the contents of a `.pub` key file. Do not store a private key,
+a PEM file, shell command, quotation marks, or Markdown code fences in this
+secret. On macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value. The
+workflow validates this secret before starting the image build. The resulting
+image:
 
 - targets ARM64 Raspberry Pi devices;
 - is based on Raspberry Pi OS Trixie Lite;

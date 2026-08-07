@@ -21,6 +21,24 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate SSH public key
+        env:
+          SSH_PUBLIC_KEY: ${{ secrets.PI_IMAGE_SSH_PUBLIC_KEY }}
+        run: |
+          if [ -z "$SSH_PUBLIC_KEY" ]; then
+            echo "PI_IMAGE_SSH_PUBLIC_KEY is not set."
+            exit 1
+          fi
+
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$SSH_PUBLIC_KEY" > "$key_file"
+
+          if ! ssh-keygen -l -f "$key_file" > /dev/null; then
+            echo "PI_IMAGE_SSH_PUBLIC_KEY must contain a valid OpenSSH public key."
+            exit 1
+          fi
+
       - name: Build image
         id: build
         uses: usimd/pi-gen-action@v1
