@@ -37,10 +37,10 @@ download before flashing it with `shasum -a 256 -c <image-file>.sha256`.
 
 ## Reproducibility
 
-The workflow pins the GitHub Actions and the `RPi-Distro/pi-gen` source to
-immutable commit IDs. Image name, Raspberry Pi OS release, and pi-gen stages
-are central workflow constants, so a specific Git commit describes the intended
-build input completely.
+The workflow pins the GitHub Actions to immutable commit IDs and uses the
+published `RPi-Distro/pi-gen` ARM64/Trixie release tag. Image name, Raspberry
+Pi OS release, and pi-gen stages are central workflow constants, so a specific
+Git commit describes the intended build input completely.
 
 The GitHub runner image and Raspberry Pi OS packages are fetched at build time.
 Consequently, rebuilding the same repository commit later can produce different

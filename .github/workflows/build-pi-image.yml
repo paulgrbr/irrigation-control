@@ -16,7 +16,7 @@ env:
   IMAGE_NAME: irrigation-control-lite
   ARTIFACT_NAME: irrigation-control-lite-arm64
   PI_GEN_REPOSITORY: RPi-Distro/pi-gen
-  PI_GEN_COMMIT: ca8aeed0ae300c2a89f55ce9617d5f96a27e99e5
+  PI_GEN_TAG: 2026-06-18-raspios-trixie-arm64
   RASPBERRY_PI_OS_RELEASE: trixie
   PI_GEN_STAGES: stage0 stage1 stage2
 
@@ -59,7 +59,7 @@ jobs:
         with:
           image-name: ${{ env.IMAGE_NAME }}
           pi-gen-repository: ${{ env.PI_GEN_REPOSITORY }}
-          pi-gen-version: ${{ env.PI_GEN_COMMIT }}
+          pi-gen-version: ${{ env.PI_GEN_TAG }}
           release: ${{ env.RASPBERRY_PI_OS_RELEASE }}
           stage-list: ${{ env.PI_GEN_STAGES }}
           verbose-output: true
