@@ -55,6 +55,11 @@ jobs:
               ;;
           esac
 
+          if [ "${#USER_PASSWORD}" -lt 12 ]; then
+            echo "PI_IMAGE_USER_PASSWORD must be at least 12 characters long for Portainer."
+            exit 1
+          fi
+
           key_file="$(mktemp)"
           trap 'rm -f "$key_file"' EXIT
           printf '%s\n' "$SSH_PUBLIC_KEY" > "$key_file"
@@ -64,11 +69,25 @@ jobs:
             exit 1
           fi
 
+      - name: Generate Portainer admin password hash
+        env:
+          USER_PASSWORD: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          hash_file="pi-image/stage-irrigation-runtime/.portainer-admin-password.hash"
+          password_hash="$(printf '%s\n' "$USER_PASSWORD" | docker run --rm -i httpd:2.4-alpine htpasswd -niB admin | cut -d ':' -f 2)"
+
+          if [[ ! "$password_hash" =~ ^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$ ]]; then
+            echo "Failed to generate a valid bcrypt hash for the Portainer administrator."
+            exit 1
+          fi
+
+          printf '%s\n' "$password_hash" > "$hash_file"
+          chmod 0600 "$hash_file"
+
       - name: Build image
         id: build
-        env:
-          PORTAINER_ADMIN_USERNAME: irrigation
-          PORTAINER_ADMIN_PASSWORD: ${{ secrets.PI_IMAGE_USER_PASSWORD }}
         uses: usimd/pi-gen-action@cec66cba86bdcd23984e6a79ea4e9251d90bc798 # v1
         with:
           image-name: ${{ env.IMAGE_NAME }}
@@ -90,6 +109,10 @@ jobs:
           locale: de_DE.UTF-8
           keyboard-keymap: de
           keyboard-layout: German
+
+      - name: Remove Portainer admin password hash
+        if: always()
+        run: rm -f pi-image/stage-irrigation-runtime/.portainer-admin-password.hash
 
       - name: Generate image checksum
         id: checksum

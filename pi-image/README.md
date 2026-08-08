@@ -34,9 +34,10 @@ The boot sequence is intentionally small and ordered:
    `System startet` to the LCD. A missing LCD never fails the boot.
 2. Docker and network connectivity start normally.
 3. `irrigation-control-bootstrap.service` downloads the current
-   `infrastructure/compose.yaml` from the public `main` branch, validates it,
-   pulls images, starts the stack, initializes Portainer's first admin, and
-   waits for backend readiness.
+   `infrastructure/compose.yaml` from the public `main` branch, combines it
+   with its protected local Portainer override, validates it, pulls images,
+   starts the stack, and waits for backend readiness. Portainer creates its
+   first administrator itself during that initial start.
 
 The downloaded Compose definition is cached at
 `/opt/irrigation-control/compose.yaml`. When download retries fail, the cached
@@ -60,7 +61,6 @@ deployment.
 | `BACKEND_READY_TIMEOUT_SECONDS`  | `300`                          | Maximum backend health wait.                                    |
 | `BACKEND_READY_INTERVAL_SECONDS` | `5`                            | Delay between backend health probes.                            |
 | `COMPOSE_PULL_TIMEOUT_SECONDS`   | `600`                          | Maximum image-pull duration before cached images are used.      |
-| `PORTAINER_URL`                  | `https://127.0.0.1:9443`       | Local Portainer API address.                                    |
 | `LCD_DISABLE`                    | `0`                            | Set to `1` to disable all LCD writes.                           |
 | `LCD_I2C_BUS`                    | `1`                            | I2C bus number.                                                 |
 | `LCD_I2C_ADDR`                   | `0x27`                         | LCD I2C address; `0x3f` is also tried when the default is used. |
@@ -106,13 +106,23 @@ Before running it, add these repository Actions secrets:
   macOS, `cat ~/.ssh/id_ed25519.pub` prints a suitable value.
 - `PI_IMAGE_USER_PASSWORD`: A strong password for the `irrigation` user's local
   console login. pi-gen requires this to keep the configured username after
-  first boot. The same secret creates the sole initial Portainer admin account
-  named `irrigation`. It must not contain a newline. SSH password
-  authentication remains disabled.
+  first boot. It must not contain a newline. SSH password authentication
+  remains disabled.
 
 The workflow validates both secrets before starting the image build. The
-password permits a local console login only. Because `pubkey-only-ssh: 1` is
-configured, SSH password authentication remains disabled.
+password must be at least 12 characters long. It permits a local console login
+and initializes the first Portainer account named `admin`. The build converts
+it to a bcrypt hash and places only that hash in a root-only local Compose
+override inside the image; it does not store the plaintext password, a
+Portainer setup token, or an unauthenticated setup bypass. Because
+`pubkey-only-ssh: 1` is configured, SSH password authentication remains
+disabled.
+
+Portainer applies the startup hash only when its `portainer_data` volume has no
+administrator. If the volume already exists, its current administrator and
+credentials remain unchanged. Use a unique, long random value for
+`PI_IMAGE_USER_PASSWORD`, because it also protects the bcrypt hash against
+offline guessing.
 
 After a successful build, download the `irrigation-control-lite-arm64` artifact
 from the workflow run and flash the ZIP image using Raspberry Pi Imager or a

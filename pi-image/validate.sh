@@ -69,19 +69,39 @@ with tempfile.TemporaryDirectory() as temporary_directory:
 	assert render_calls == [True, False]
 PY
 
-config_file="$(mktemp)"
+hash_file="${runtime_dir}/../.portainer-admin-password.hash"
+image_root="$(mktemp -d)"
 unit_root="$(mktemp -d)"
-trap 'rm -f "$config_file"; rm -rf "$unit_root"' EXIT
-test_password='space quote" dollar$ slash\ single'"'"'quote'
-{
-	printf 'PORTAINER_ADMIN_USERNAME=%q\n' "irrigation"
-	printf 'PORTAINER_ADMIN_PASSWORD=%q\n' "$test_password"
-} >"$config_file"
-unset PORTAINER_ADMIN_USERNAME PORTAINER_ADMIN_PASSWORD
-# shellcheck disable=SC1090
-. "$config_file"
-[[ "$PORTAINER_ADMIN_USERNAME" = "irrigation" ]]
-[[ "$PORTAINER_ADMIN_PASSWORD" = "$test_password" ]]
+trap 'rm -f "$hash_file"; rm -rf "$image_root" "$unit_root"' EXIT
+test_hash='$2y$05$8oz75U8m5tI/xT4P0NbSHeE7WyRzOWKRBprfGotwDkhBOGP/u802u'
+printf '%s\n' "$test_hash" >"$hash_file"
+chmod 0600 "$hash_file"
+(
+	cd "$runtime_dir"
+	ROOTFS_DIR="$image_root" bash ./00-run.sh
+)
+
+portainer_override="${image_root}/opt/irrigation-control/compose.portainer-admin.yaml"
+if stat -c '%a' "$portainer_override" >/dev/null 2>&1; then
+	portainer_override_mode="$(stat -c '%a' "$portainer_override")"
+else
+	portainer_override_mode="$(stat -f '%Lp' "$portainer_override")"
+fi
+[[ "$portainer_override_mode" = "600" ]]
+grep -F -- '--admin-password=$$2y$$05$$8oz75U8m5tI/xT4P0NbSHeE7WyRzOWKRBprfGotwDkhBOGP/u802u' "$portainer_override" >/dev/null
+! grep -Eq 'PORTAINER_ADMIN|PI_IMAGE_USER_PASSWORD' "$portainer_override"
+[[ ! -e "${image_root}/etc/default/irrigation-control-bootstrap" ]]
+
+printf '%s\n' 'not-a-bcrypt-hash' >"$hash_file"
+if (
+	cd "$runtime_dir"
+	ROOTFS_DIR="$image_root" bash ./00-run.sh
+) >/dev/null 2>&1; then
+	echo "Invalid Portainer bcrypt hash was accepted." >&2
+	exit 1
+fi
+
+printf '%s\n' "$test_hash" >"$hash_file"
 
 if command -v systemd-analyze >/dev/null 2>&1; then
 	install -d "${unit_root}/etc/systemd/system"
@@ -111,4 +131,7 @@ if command -v systemd-analyze >/dev/null 2>&1; then
 		irrigation-control-display-early.service
 fi
 
-docker compose -f "${repo_root}/infrastructure/compose.yaml" config --quiet
+docker compose \
+	-f "${repo_root}/infrastructure/compose.yaml" \
+	-f "$portainer_override" \
+	config --quiet

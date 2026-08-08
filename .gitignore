@@ -6,6 +6,9 @@ __pycache__/
 # Local SSH keys used while testing Raspberry Pi images.
 pi-image/ssh/
 
+# Ephemeral bcrypt hash generated for the Pi image build.
+pi-image/stage-irrigation-runtime/.portainer-admin-password.hash
+
 # C extensions
 *.so
 
@@ -221,3 +224,4 @@ __marimo__/
 .streamlit/secrets.toml
 pins.txt
 pins.sh
+.vscode/settings.json

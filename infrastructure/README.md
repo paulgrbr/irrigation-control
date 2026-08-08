@@ -12,10 +12,16 @@ devices. At every boot, the image downloads the current version from the
 | Backend          | `paulgrbr/irrigation-control-backend:latest` | `http://<pi-host>:8080`  |
 | Frontend example | `nginx:1.27-alpine`                          | `http://<pi-host>:8081`  |
 
-Portainer's first administrator is bootstrapped automatically during the Pi's
-first boot. The image creates the single `irrigation` admin account with the
-same password as the initial image user. Portainer stores its state in the
-`portainer_data` Docker volume.
+Portainer creates its first administrator automatically when it starts with a
+fresh `portainer_data` Docker volume. The account name is `admin`, as required
+by Portainer's documented `--admin-password` startup option. Its password is
+the same as the initial image user's password by project decision; the image
+contains only a bcrypt hash in a root-only local Compose override, never the
+plaintext password or a setup-token bypass.
+
+An existing `portainer_data` volume is left unchanged. Its existing
+administrator credentials remain authoritative, and Portainer ignores the
+startup password option after initialization.
 
 The backend waits until the Pi bootstrap has finished its LCD progress display.
 It then writes `Willkommen` to the attached 20x4 I2C LCD and activates each

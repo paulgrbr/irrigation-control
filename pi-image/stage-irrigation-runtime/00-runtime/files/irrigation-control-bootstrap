@@ -3,9 +3,11 @@ set -euo pipefail
 
 compose_dir="/opt/irrigation-control"
 compose_file="${compose_dir}/compose.yaml"
+compose_portainer_admin_override="${compose_dir}/compose.portainer-admin.yaml"
 compose_url="https://raw.githubusercontent.com/paulgrbr/irrigation-control/main/infrastructure/compose.yaml"
 temporary_compose="$(mktemp)"
 compose_cmd=()
+compose_files=()
 display_cmd="/usr/local/sbin/irrigation-control-display"
 backend_health_url="${BACKEND_HEALTH_URL:-http://127.0.0.1:8080/health}"
 backend_timeout_seconds="${BACKEND_READY_TIMEOUT_SECONDS:-300}"
@@ -16,12 +18,6 @@ compose_pull_timeout_seconds="${COMPOSE_PULL_TIMEOUT_SECONDS:-600}"
 current_step="BOOTING"
 compose_candidate=""
 compose_source=""
-portainer_url="${PORTAINER_URL:-https://127.0.0.1:9443}"
-portainer_admin_username="${PORTAINER_ADMIN_USERNAME:-}"
-portainer_admin_password="${PORTAINER_ADMIN_PASSWORD:-}"
-portainer_init_timeout_seconds="${PORTAINER_INIT_TIMEOUT_SECONDS:-120}"
-portainer_init_retry_seconds="${PORTAINER_INIT_RETRY_SECONDS:-3}"
-portainer_env_file="/etc/default/irrigation-control-bootstrap"
 
 wait_docker_probe_total="30"
 wait_docker_probe_sleep_seconds="2"
@@ -35,7 +31,6 @@ INSTALL_PERCENT="50"
 PULL_PERCENT_START="65"
 PULL_PERCENT_END="79"
 START_PERCENT="80"
-PORTAINER_INIT_PERCENT="85"
 WAIT_BACKEND_PERCENT_START="90"
 WAIT_BACKEND_PERCENT_END="99"
 READY_PERCENT="100"
@@ -61,24 +56,6 @@ on_error() {
 }
 
 trap on_error ERR
-
-load_portainer_credentials() {
-	if [ -n "$portainer_admin_username" ] && [ -n "$portainer_admin_password" ]; then
-		return
-	fi
-
-	portainer_admin_username=""
-	portainer_admin_password=""
-	if [ ! -f "$portainer_env_file" ]; then
-		return
-	fi
-
-	# File is generated with Bash %q during image creation and is root-only.
-	# shellcheck disable=SC1090
-	. "$portainer_env_file"
-	portainer_admin_username="${PORTAINER_ADMIN_USERNAME:-}"
-	portainer_admin_password="${PORTAINER_ADMIN_PASSWORD:-}"
-}
 
 set_step() {
 	current_step="$1"
@@ -140,6 +117,20 @@ detect_compose_command() {
 	false
 }
 
+configure_compose_files() {
+	if [ ! -f "$compose_portainer_admin_override" ]; then
+		echo "[bootstrap] missing Portainer admin Compose override: ${compose_portainer_admin_override}" >&2
+		false
+	fi
+
+	if [ "$(stat -c '%a' "$compose_portainer_admin_override")" != "600" ]; then
+		echo "[bootstrap] Portainer admin Compose override must have mode 0600" >&2
+		false
+	fi
+
+	compose_files=(-f "$compose_file" -f "$compose_portainer_admin_override")
+}
+
 fetch_compose_with_retry() {
 	set_step "FETCH_COMPOSE" "FETCH_COMPOSE" "$FETCH_COMPOSE_PERCENT" "Compose Download"
 
@@ -176,7 +167,7 @@ fetch_compose_with_retry() {
 
 validate_and_install_compose() {
 	set_step "VALIDATE_COMPOSE" "VALIDATE" "$VALIDATE_PERCENT" "Datei pruefen"
-	"${compose_cmd[@]}" -f "$compose_candidate" config --quiet
+	"${compose_cmd[@]}" -f "$compose_candidate" -f "$compose_portainer_admin_override" config --quiet
 
 	set_step "INSTALL_COMPOSE" "INSTALL" "$INSTALL_PERCENT" "Datei sichern"
 	if [ "$compose_source" = "remote" ]; then
@@ -187,77 +178,12 @@ validate_and_install_compose() {
 	fi
 }
 
-wait_for_portainer_api() {
-	local deadline_seconds="${1:?missing deadline}"
-	local status_url="${portainer_url}/api/status"
-	local current_time
-	current_time="$(date +%s)"
-	while [ "$current_time" -lt "$deadline_seconds" ]; do
-		if curl --insecure --fail --silent --show-error --max-time 3 "$status_url" >/dev/null; then
-			return 0
-		fi
-		sleep "$portainer_init_retry_seconds"
-		current_time="$(date +%s)"
-	done
-
-	echo "[bootstrap] portainer api did not become ready: ${status_url}" >&2
-	return 1
-}
-
-bootstrap_portainer_admin() {
-	if [ -z "$portainer_admin_username" ] || [ -z "$portainer_admin_password" ]; then
-		echo "[bootstrap] portainer credentials not configured; skipping admin init" >&2
-		return 0
-	fi
-
-	set_step "PORTAINER_INIT" "PORTAINER_INIT" "$PORTAINER_INIT_PERCENT" "Portainer einrichten"
-
-	local deadline_seconds
-	deadline_seconds="$(( $(date +%s) + portainer_init_timeout_seconds ))"
-	if ! wait_for_portainer_api "$deadline_seconds"; then
-		echo "[bootstrap] continuing without portainer admin initialization" >&2
-		return 0
-	fi
-
-	local payload response_code response_body
-	payload="$(PORTAINER_ADMIN_USERNAME="$portainer_admin_username" PORTAINER_ADMIN_PASSWORD="$portainer_admin_password" python3 - <<'PY'
-import json
-import os
-
-print(json.dumps({
-    "Username": os.environ["PORTAINER_ADMIN_USERNAME"],
-    "Password": os.environ["PORTAINER_ADMIN_PASSWORD"],
-}))
-PY
-)"
-	response_body="$(mktemp)"
-	response_code="$(curl --insecure --silent --show-error --output "$response_body" --write-out '%{http_code}' --request POST "${portainer_url}/api/users/admin/init" --header 'Content-Type: application/json' --data "$payload" || true)"
-	case "$response_code" in
-		200|201|204|409)
-			if [ "$response_code" = "409" ]; then
-				echo "[bootstrap] portainer admin already initialized" >&2
-			else
-				echo "[bootstrap] portainer admin initialized" >&2
-			fi
-			rm -f "$response_body"
-			return 0
-			;;
-		*)
-			echo "[bootstrap] portainer admin init failed with HTTP ${response_code}" >&2
-			cat "$response_body" >&2 || true
-			rm -f "$response_body"
-			echo "[bootstrap] continuing without portainer admin initialization" >&2
-			return 0
-			;;
-	esac
-}
-
 pull_images_with_progress() {
 	local pull_percent="$PULL_PERCENT_START"
 	local pull_started_at
 	set_step "PULL_IMAGES" "PULL_IMAGES" "$pull_percent" "Images werden geladen"
 
-	"${compose_cmd[@]}" -f "$compose_file" pull &
+	"${compose_cmd[@]}" "${compose_files[@]}" pull &
 	local pull_pid="$!"
 	pull_started_at="$(date +%s)"
 	while kill -0 "$pull_pid" 2>/dev/null; do
@@ -285,7 +211,7 @@ pull_images_with_progress() {
 
 start_compose_stack() {
 	set_step "START_CONTAINERS" "START" "$START_PERCENT" "Container starten"
-	"${compose_cmd[@]}" -f "$compose_file" up -d --remove-orphans
+	"${compose_cmd[@]}" "${compose_files[@]}" up -d --remove-orphans
 }
 
 wait_for_backend_ready() {
@@ -324,13 +250,12 @@ mark_ready() {
 set_step "BOOTING" "BOOTING" "5" "System wird vorbereitet"
 
 install -d -m 0755 "$compose_dir"
-load_portainer_credentials
 wait_for_docker
 detect_compose_command
 fetch_compose_with_retry
+configure_compose_files
 validate_and_install_compose
 pull_images_with_progress
 start_compose_stack
-bootstrap_portainer_admin
 wait_for_backend_ready
 mark_ready
